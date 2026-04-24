@@ -1,0 +1,40 @@
+menu "Project Configuration"
+
+    orsource "Kconfig.env_caps"
+
+    config PIN_BOOT_BUTTON
+        int "Pin number of BOOT button"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 0
+
+    config PIN_ENCODER_S1
+        int "Pin number of rotary encoder S1 output (counter)"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 18
+
+    config PIN_ENCODER_S2
+        int "Pin number of rotary encoder S2 output (direction)"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 17
+
+    config PIN_ENCODER_KEY
+        int "Pin number of rotary encoder key output"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 16
+
+    config PIN_LED
+        int "Pin number of LED (pull-down, active high)"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 1
+
+    config PIN_ADC_V
+        int "Pin number of ADC_V channel input"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 4
+
+    config PIN_ADC_I
+        int "Pin number of ADC_I channel input"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 9
+
+endmenu

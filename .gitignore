@@ -1,40 +1,46 @@
+.qtcreator/
+
+build/
+managed_components/
+docs/gem/
+
+/sdkconfig.old
+
 # For PCBs designed using KiCad: https://www.kicad.org/
 # Format documentation: https://kicad.org/help/file-formats/
 
 # Temporary files
-*.000
-*.bak
-*.bck
-*.kicad_pcb-bak
-*.kicad_sch-bak
-*-backups
-*-cache*
-*-bak
-*-bak*
-*~
-~*
-_autosave-*
-\#auto_saved_files\#
-*.tmp
-*-save.pro
-*-save.kicad_pcb
-fp-info-cache
-~*.lck
-\#auto_saved_files#
+pcb/*.000
+pcb/*.bak
+pcb/*.bck
+pcb/*.kicad_pcb-bak
+pcb/*.kicad_sch-bak
+pcb/*-backups
+pcb/*-cache*
+pcb/*-bak
+pcb/*-bak*
+pcb/*~
+pcb/~*
+pcb/_autosave-*
+pcb/\#auto_saved_files\#
+pcb/*.tmp
+pcb/*-save.pro
+pcb/*-save.kicad_pcb
+pcb/fp-info-cache
+pcb/~*.lck
 
 # Netlist files (exported from Eeschema)
-*.net
+pcb/*.net
 
 # Autorouter files (exported from Pcbnew)
-*.dsn
-*.ses
+pcb/*.dsn
+pcb/*.ses
 
 # Exported BOM files
-*.xml
-*.csv
+pcb/production/*
 
 # Archived Backups (KiCad 6.0)
-**/*-backups/*.zip
+pcb/**/*-backups/*.zip
 
 # Local project settings
-*.kicad_prl
+pcb/*.kicad_prl

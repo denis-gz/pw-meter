@@ -1,0 +1,4 @@
+CompileFlags:
+  Remove: [-m*, -f*]
+  Add: [-Wno-switch, -Wno-c99-designator]
+  CompilationDatabase: ..\build
