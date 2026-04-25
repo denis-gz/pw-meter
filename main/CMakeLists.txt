@@ -5,6 +5,7 @@ idf_component_register(
     esp_driver_gpio
     esp_driver_pcnt
     esp_driver_i2c
+    esp_driver_spi
     esp_timer
     esp_event
   INCLUDE_DIRS "."

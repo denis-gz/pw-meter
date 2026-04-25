@@ -17,6 +17,14 @@ void PowerMeterApp::compute_task()
     float v_array[CHUNK_SIZE] = {};
     float i_array[CHUNK_SIZE] = {};
 
+    // We will also build a new, perfectly aligned current array of exactly 819 samples,
+    // to accomodate 4 samples phase shift
+    float aligned_v_array[CHUNK_SIZE] = {};
+
+    // This is used to save the last 4 samples of the previous chunk since the current
+    // goes ahead of voltage due to LM358 singal processing delay
+    float prev_v_history[LM_COARS_SAMPLES_SHIFT] = {};
+
     uint64_t display_task_trigger = 0;
 
     while (!m_stop_tasks) {
@@ -25,7 +33,7 @@ void PowerMeterApp::compute_task()
             m_i_ring_buffer.available() >= CHUNK_SIZE) {
 
             // Sacrifice the first chunk to perform initial DC bias learning
-            if (isnanf(m_v_dc_blocker.get_current_dc_bias())) {
+            if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
                 for (int i = 0; i < CHUNK_SIZE; i++) {
                     float raw_v, raw_i;
                     m_v_ring_buffer.pop(raw_v);
@@ -63,6 +71,10 @@ void PowerMeterApp::compute_task()
                     m_i_dc_blocker.set_current_dc_bias(i_bias);
                     ESP_LOGI(TAG, "I DC bias: minV = %0.1f, maxV = %0.1f, bias = %0.1f\n", minV, maxV, i_bias);
                 }
+                // Save 4 last centered bytes for the next chunk
+                for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
+                    prev_v_history[i] = m_v_dc_blocker.process(v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT + i]);
+                }
                 continue;
             }
 
@@ -75,7 +87,14 @@ void PowerMeterApp::compute_task()
                 i_array[i] = m_i_dc_blocker.process(raw_i);
             }
 
-            // **** DEBUG
+            // Get first 4 samples from the previous chunk
+            memcpy(&aligned_v_array[0], &prev_v_history[0], LM_COARS_SAMPLES_SHIFT * sizeof(float));
+            // Fill the rest 815 samples from the current chunk
+            memcpy(&aligned_v_array[LM_COARS_SAMPLES_SHIFT], &v_array[0], (CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT) * sizeof(float));
+            // Save the last 4 samples of the current chunk for the next reading
+            memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT], LM_COARS_SAMPLES_SHIFT * sizeof(float));
+
+            // **** DEBUG *****
         /*
             //ESP_ERROR_CHECK(adc_continuous_stop(m_adc_handle));
             {   float maxV = -std::numeric_limits<float>::max();
@@ -109,8 +128,8 @@ void PowerMeterApp::compute_task()
                 ESP_LOGI(TAG, "minI: %0.1f, maxI: %0.1f, swing: %0.1f, DC bias: %0.2f\n", minI, maxI, maxI-minI, m_i_dc_blocker.get_current_dc_bias());
             }
             break;
-            // **** DEBUG
          */
+            // **** DEBUG *****
 
             // Calculate the grid frequency
 
@@ -125,9 +144,9 @@ void PowerMeterApp::compute_task()
             // Iterate through the voltage array to find rising edges (negative to positive)
             for (int i = 1; i < CHUNK_SIZE; i++) {
                 // Find zero-crossing indices for voltage sine wave
-                if (v_array[i - 1] < 0.0f && v_array[i] >= 0.0f) {
+                if (aligned_v_array[i - 1] < 0.0f && aligned_v_array[i] >= 0.0f) {
                     // Calculate the exact sub-sample fractional index of the crossing
-                    float fraction = (0.0f - v_array[i - 1]) / (v_array[i] - v_array[i - 1]);
+                    float fraction = (0.0f - aligned_v_array[i - 1]) / (aligned_v_array[i] - aligned_v_array[i - 1]);
                     float exact_index = (i - 1) + fraction;
                     if (v_cycle_count == 0) {
                         v_first_crossing_index = exact_index;
@@ -151,8 +170,6 @@ void PowerMeterApp::compute_task()
                     }
                     i_cycle_count++;
                 }
-
-                (void) i_last_crossing_index;
             }
 
             // We need at least 2 crossings to measure the time of 1 full cycle
@@ -161,7 +178,7 @@ void PowerMeterApp::compute_task()
                 float delta_index = v_last_crossing_index - v_first_crossing_index;
 
                 // Frequency = (Cycles / Samples) * Sampling_Rate
-                m_frequency = (total_full_cycles_measured / delta_index) * (SAMPLE_FREQ_HZ / 2.0f);
+                m_frequency = (total_full_cycles_measured / delta_index) * CHANNEL_FREQ_HZ;
 
                 // ***** Calculate the power factor *****
                 if (v_first_crossing_index >= 0.0f && i_first_crossing_index >= 0.0f) {
@@ -170,8 +187,9 @@ void PowerMeterApp::compute_task()
                     float measured_sample_delay = i_first_crossing_index - v_first_crossing_index;
 
                     // The LC Tech board artificially delays the voltage, making current LOOK like it's ahead.
-                    // We subtract 4.2 to fix reality.
-                    float true_sample_delay = measured_sample_delay - LM_FINE_SAMPLES_SHIFT;
+                    // We subtracted the integral part when we aligned the chunk, so do it now for the fraction part
+                    // to finally fix the reality.
+                    float true_sample_delay = measured_sample_delay - (LM_FINE_SAMPLES_SHIFT - LM_COARS_SAMPLES_SHIFT);
 
                     // Convert the true sample delay into Radians
                     // Samples_Per_Cycle = Sampling_Rate / Grid_Frequency
@@ -195,15 +213,14 @@ void PowerMeterApp::compute_task()
                 }
             }
 
-            //m_vi_sample_shift = (i_first_crossing_index - v_first_crossing_index) + (i_last_crossing_index - v_last_crossing_index);
-            //m_vi_sample_shift /= 2.0f;
+            m_vi_sample_shift = (i_first_crossing_index - v_first_crossing_index) + (i_last_crossing_index - v_last_crossing_index);
+            m_vi_sample_shift /= 2.0f;
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
             float v_sq_sum = 0;
             float i_sq_sum = 0;
-            float real_pwr = 0;
 
-            dsps_dotprod_f32(v_array, v_array, &v_sq_sum, CHUNK_SIZE);
+            dsps_dotprod_f32(aligned_v_array, aligned_v_array, &v_sq_sum, CHUNK_SIZE);
             dsps_dotprod_f32(i_array, i_array, &i_sq_sum, CHUNK_SIZE);
 
             m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * V_COEF;
@@ -218,14 +235,15 @@ void PowerMeterApp::compute_task()
             else {
                 m_apparent_power = m_v_rms * m_i_rms;       // VA
 
-                // We must process slightly fewer samples since we are offsetting the arrays
-                const int ALIGNED_LENGTH = CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT;
-
-                // Shift the Current pointer forward by LM_SAMPLES_SHIFT to wait for the Voltage to catch up
-                dsps_dotprod_f32(&v_array[0], &i_array[LM_COARS_SAMPLES_SHIFT], &real_pwr, ALIGNED_LENGTH);
-                real_pwr /= ALIGNED_LENGTH;
+                float real_pwr = 0;
+                dsps_dotprod_f32(aligned_v_array, i_array, &real_pwr, CHUNK_SIZE);
+                real_pwr /= CHUNK_SIZE;
                 real_pwr *= V_COEF * I_COEF;                // Watts
                 m_real_power = real_pwr;
+
+                // 819 samples at 4096Hz is exactly 0.199951 seconds (0.00005554 hours)
+                const double CHUNK_TIME_HOURS = (CHUNK_SIZE / (double) CHANNEL_FREQ_HZ) / 3600.0;
+                m_accumulated_energy += (double) m_real_power * CHUNK_TIME_HOURS;
             }
         }
         else {
@@ -234,13 +252,18 @@ void PowerMeterApp::compute_task()
             continue;
         }
 
-        ComputeResultMessage qmsg = {
-            .v_rms = m_v_rms,
-            .i_rms = m_i_rms,
-            .apparent_power = m_apparent_power,
-            .real_power = m_real_power,
-            .cos_phi = m_cos_phi,
-            .frequency = m_frequency,
+        DisplayTaskMessage qmsg {
+            .type = MessageType::ComputeResultMessage,
+            .compute_result = {
+                .v_rms = m_v_rms,
+                .i_rms = m_i_rms,
+                .apparent_power = m_apparent_power,
+                .real_power = m_real_power,
+                .energy = m_accumulated_energy,
+                .cos_phi = m_cos_phi,
+                .frequency = m_frequency,
+                .m_vi_shift = m_vi_sample_shift,
+            },
         };
         if (xQueueSend(m_display_queue, &qmsg, 0) != pdPASS) {
             ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");

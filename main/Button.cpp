@@ -10,9 +10,11 @@
 std::once_flag Button::s_isr_service_flag;
 
 // How much time a pin should have the HIGH level to clear button depressed state
-constexpr const int64_t HIGH_STATE_GUARD_INTERVAL_US = 10 * 1000LL;    // 10 ms
+constexpr const int64_t HIGH_STATE_GUARD_INTERVAL_US = 10 * 1000LL;         // 10 ms
+constexpr const int64_t HIGH_STATE_LONG_CLICK_INTERVAL_US = 500 * 1000LL;   // 500 ms
 
-Button::Button(int pin, callback_t callback)
+
+Button::Button(int pin, callback_t on_click)
 {
     std::call_once(s_isr_service_flag, []() {
         esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
@@ -34,7 +36,7 @@ Button::Button(int pin, callback_t callback)
     ESP_ERROR_CHECK(gpio_config(&gpio_conf));
     ESP_ERROR_CHECK(gpio_isr_handler_add(m_pin, member_cast<gpio_isr_t>(&Button::handler), this));
     ESP_ERROR_CHECK(gpio_intr_enable(m_pin));
-    m_callback = callback;
+    m_on_click = on_click;
 
     gpio_pin_glitch_filter_config_t gl_conf = {
         .clk_src = GLITCH_FILTER_CLK_SRC_DEFAULT,
@@ -88,7 +90,8 @@ void IRAM_ATTR Button::handler()
     if (m_level == 0
         && m_depress_time   // Exclude consequtive depress or release events
         && m_release_time
-        && m_depress_time - m_release_time > HIGH_STATE_GUARD_INTERVAL_US) {
-        m_callback();
+        && m_depress_time - m_release_time > HIGH_STATE_GUARD_INTERVAL_US)
+    {
+        m_on_click(m_release_time - m_depress_time > HIGH_STATE_LONG_CLICK_INTERVAL_US);
     }
 }

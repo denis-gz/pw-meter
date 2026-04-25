@@ -1,17 +1,18 @@
 #pragma once
 
-#include <esp_adc/adc_continuous.h>
-#include <esp_adc/adc_cali.h>
-
 #include <freertos/FreeRTOS.h>
+#include <esp_log.h>
 
-#include "RingBuffer.h"
-#include "DCBlocker.h"
-#include "Button.h"
-#include "CPULoadMeter.h"
+#include "common.h"
+
+#include "Reader.h"
+#include "Compute.h"
+#include "Input.h"
+#include "Display.h"
 
 // 4096 Hz per channel * 2 channels = 8192 Hz total sampling frequency
 #define SAMPLE_FREQ_HZ  8192
+#define CHANNEL_FREQ_HZ 4096
 
 // Number of bytes the DMA will push to our task at once.
 // 1024 bytes = 256 samples (128 voltage + 128 current) per frame.
@@ -22,10 +23,10 @@
 #define LM_COARS_SAMPLES_SHIFT  (4)
 
 // Actual sub-fraction sampling shift (measured samples)
-#define LM_FINE_SAMPLES_SHIFT   (4.2f)
+#define LM_FINE_SAMPLES_SHIFT   (4.45f)
 
 const float V_COEF = 0.55f;
-const float I_COEF = 0.0264f;
+const float I_COEF = 0.0262f;
 
 class PowerMeterApp
 {
@@ -38,22 +39,52 @@ public:
     }
 
 private:
-    void setup_adc();
-    void setup_tasks();
-
-    void reader_task();
-    void compute_task();
-    void extracted();
-    void display_task();
+    enum class MessageType {
+        ComputeResultMessage,
+        InputMessage,
+    };
 
     struct ComputeResultMessage {
         float v_rms;
         float i_rms;
         float apparent_power;
         float real_power;
+        double energy;
         float cos_phi;
         float frequency;
+        float m_vi_shift;
     };
+
+    enum class InputAction {
+        Next,
+        Prev,
+        Confirm,
+        Back,
+    };
+
+    struct InputMessage {
+        InputAction action;
+    };
+
+    struct DisplayTaskMessage {
+        MessageType type;
+        union {
+            ComputeResultMessage compute_result;
+            InputMessage input;
+        };
+    };
+
+    void setup_reader(bool disposing = false);
+    void setup_display(bool disposing = false);
+    void setup_input(bool disposing = false);
+    void setup_tasks();
+
+    void display_task();
+    void compute_task();
+    void reader_task();
+
+    void on_rotate(bool is_ccw);
+    void on_click(bool is_long);
 
 private:
     adc_channel_t m_adc_v_channel_id {};
@@ -69,7 +100,10 @@ private:
     DCBlocker m_v_dc_blocker;
     DCBlocker m_i_dc_blocker;
 
-    Button m_button;
+    SSD1306_t m_oled {};
+    RotaryEncoder m_encoder;
+    Button m_encoder_key;
+
     CPULoadMeter m_cpu_meter;
 
     volatile float m_v_rms = 0;
@@ -79,6 +113,7 @@ private:
     volatile float m_cos_phi = 0;
     volatile float m_frequency = 0;
     volatile float m_vi_sample_shift = 0;
+    volatile double m_accumulated_energy = 0;
 
     volatile bool m_stop_tasks = false;
 

@@ -6,9 +6,9 @@
 
 #include "common.h"
 
-RotaryEncoder::RotaryEncoder(int pin_S1, int pin_S2, std::function<void(bool)> callback)
+RotaryEncoder::RotaryEncoder(int pin_S1, int pin_S2, std::function<void(bool)> on_rotate)
 {
-    m_callback = callback;
+    m_callback = on_rotate;
 
     pcnt_unit_config_t pcnt_unit_config = {
         .low_limit = -1,

@@ -4,9 +4,7 @@
 #include <esp_log.h>
 #include <memory>
 
-#include "sdkconfig.h"
 #include "common.h"
-
 #include "PowerMeterApp.h"
 
 extern "C" void app_main() {

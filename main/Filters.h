@@ -47,12 +47,11 @@ private:
 
 public:
     // Initialize with NAN. Default to a 20-sigma jump threshold.
-    AdaptiveDisplayFilter(float absolute_limit, float alpha_val = 0.45f, float sigma_limit = 20.0f) {
+    AdaptiveDisplayFilter(float absolute_limit, float sigma_limit = 20.0f, float alpha_val = 0.45f) {
         absolute_jump_threshold = absolute_limit;
-        alpha = alpha_val;
         sigma_threshold = sigma_limit;
-        current_value = NAN; 
-        variance = 0.0f;
+        alpha = alpha_val;
+        reset();
     }
 
     float process(float new_reading) {
@@ -81,6 +80,11 @@ public:
         }
 
         return current_value;
+    }
+
+    void reset() {
+        current_value = NAN;
+        variance = 0.0f;
     }
 
     float get() const {

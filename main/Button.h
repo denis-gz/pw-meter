@@ -10,9 +10,9 @@
 class Button
 {
 public:
-    typedef std::function<void()> callback_t;
+    typedef std::function<void(bool)> callback_t;
 
-    Button(int pin, callback_t callback);
+    Button(int pin, callback_t on_click);
     ~Button();
 
 private:
@@ -27,7 +27,7 @@ private:
     gpio_num_t m_pin = GPIO_NUM_NC;
     gpio_glitch_filter_handle_t gl_handle = {};
 
-    callback_t m_callback;
+    callback_t m_on_click;
 
     void handler();
 };

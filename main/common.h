@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sdkconfig.h"
+
 #define nameof(x) #x
 
 #define countof(ARRAY) (sizeof(ARRAY) / sizeof(ARRAY[0]))
