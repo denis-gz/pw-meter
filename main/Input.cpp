@@ -16,8 +16,12 @@ void PowerMeterApp::on_rotate(bool is_ccw)
         .type = MessageType::InputMessage,
         .input = { .action = is_ccw ? InputAction::Prev : InputAction::Next },
     };
-    if (xQueueSendFromISR(m_display_queue, &qmsg, 0) != pdPASS) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (xQueueSendFromISR(m_display_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
         ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+    }
+    if (xHigherPriorityTaskWoken) {
+        portYIELD_FROM_ISR();
     }
 }
 
@@ -27,7 +31,11 @@ void PowerMeterApp::on_click(bool is_long)
         .type = MessageType::InputMessage,
         .input = { .action = is_long ? InputAction::Back : InputAction::Confirm },
     };
-    if (xQueueSendFromISR(m_display_queue, &qmsg, 0) != pdPASS) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (xQueueSendFromISR(m_display_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
         ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+    }
+    if (xHigherPriorityTaskWoken) {
+        portYIELD_FROM_ISR();
     }
 }

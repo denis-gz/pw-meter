@@ -10,9 +10,6 @@ void PowerMeterApp::compute_task()
 {
     ESP_LOGI(TAG, "compute_task: started");
 
-    // We want to process exactly 10 AC cycles (at 50Hz and 4096 sampling rate)
-    const int CHUNK_SIZE = 819;     // 4096 / 50 * 10
-
     // These will contain the centered AC_V and AC_I values
     float v_array[CHUNK_SIZE] = {};
     float i_array[CHUNK_SIZE] = {};
@@ -136,15 +133,19 @@ void PowerMeterApp::compute_task()
             float v_first_crossing_index = NAN;
             float v_last_crossing_index = NAN;
             int v_cycle_count = 0;
+            int v_skip_count = 0;
 
-            float i_first_crossing_index = NAN;
-            float i_last_crossing_index = NAN;
-            int i_cycle_count = 0;
+            //float i_first_crossing_index = NAN;
+            //float i_last_crossing_index = NAN;
+            //int i_cycle_count = 0;
 
             // Iterate through the voltage array to find rising edges (negative to positive)
             for (int i = 1; i < CHUNK_SIZE; i++) {
-                // Find zero-crossing indices for voltage sine wave
-                if (aligned_v_array[i - 1] < 0.0f && aligned_v_array[i] >= 0.0f) {
+                // Find zero-crossing indices for voltage sine wave (with hysteresis)
+                if (v_skip_count) {
+                    v_skip_count--;
+                }
+                else if (aligned_v_array[i - 1] < 0.0f && aligned_v_array[i] >= 0.0f) {
                     // Calculate the exact sub-sample fractional index of the crossing
                     float fraction = (0.0f - aligned_v_array[i - 1]) / (aligned_v_array[i] - aligned_v_array[i - 1]);
                     float exact_index = (i - 1) + fraction;
@@ -155,8 +156,9 @@ void PowerMeterApp::compute_task()
                         v_last_crossing_index = exact_index;
                     }
                     v_cycle_count++;
+                    v_skip_count = 20;
                 }
-
+            /*
                 // Do the same for current as well
                 if (i_array[i - 1] < 0.0f && i_array[i] >= 0.0f) {
                     // Calculate the exact sub-sample fractional index of the crossing
@@ -170,6 +172,7 @@ void PowerMeterApp::compute_task()
                     }
                     i_cycle_count++;
                 }
+             */
             }
 
             // We need at least 2 crossings to measure the time of 1 full cycle
@@ -179,7 +182,7 @@ void PowerMeterApp::compute_task()
 
                 // Frequency = (Cycles / Samples) * Sampling_Rate
                 m_frequency = (total_full_cycles_measured / delta_index) * CHANNEL_FREQ_HZ;
-
+            /*
                 // ***** Calculate the power factor *****
                 if (v_first_crossing_index >= 0.0f && i_first_crossing_index >= 0.0f) {
 
@@ -192,9 +195,8 @@ void PowerMeterApp::compute_task()
                     float true_sample_delay = measured_sample_delay - (LM_FINE_SAMPLES_SHIFT - LM_COARS_SAMPLES_SHIFT);
 
                     // Convert the true sample delay into Radians
-                    // Samples_Per_Cycle = Sampling_Rate / Grid_Frequency
-                    // float samples_per_cycle = 4096.0f / m_frequency;
-                    float samples_per_cycle = delta_index / total_full_cycles_measured;     // optimized
+                    // Samples_Per_Cycle = Samples / Cycles
+                    float samples_per_cycle = delta_index / total_full_cycles_measured;
 
                     // Phase Angle (in Radians) = (Delay / Samples per Cycle) * 2π
                     float true_angle_radians = (true_sample_delay / samples_per_cycle) * (2.0f * M_PI);
@@ -211,10 +213,11 @@ void PowerMeterApp::compute_task()
 
                     m_cos_phi = cos_phi;
                 }
+             */
             }
 
-            m_vi_sample_shift = (i_first_crossing_index - v_first_crossing_index) + (i_last_crossing_index - v_last_crossing_index);
-            m_vi_sample_shift /= 2.0f;
+            //m_vi_sample_shift = (i_first_crossing_index - v_first_crossing_index) + (i_last_crossing_index - v_last_crossing_index);
+            //m_vi_sample_shift /= 2.0f;
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
             float v_sq_sum = 0;
@@ -226,11 +229,11 @@ void PowerMeterApp::compute_task()
             m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * V_COEF;
             m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * I_COEF;
 
-            if (m_i_rms < 0.05f) {
+            if (m_i_rms < CURRENT_NOISE_FLOOR) {
                 m_i_rms = 0.0f;
                 m_apparent_power = 0.0f;
                 m_real_power = 0.0f;
-                m_cos_phi = NAN;
+                //m_cos_phi = NAN;
             }
             else {
                 m_apparent_power = m_v_rms * m_i_rms;       // VA
@@ -242,7 +245,7 @@ void PowerMeterApp::compute_task()
                 m_real_power = real_pwr;
 
                 // 819 samples at 4096Hz is exactly 0.199951 seconds (0.00005554 hours)
-                const double CHUNK_TIME_HOURS = (CHUNK_SIZE / (double) CHANNEL_FREQ_HZ) / 3600.0;
+                const double CHUNK_TIME_HOURS = (static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ) / 3600.0;
                 m_accumulated_energy += (double) m_real_power * CHUNK_TIME_HOURS;
             }
         }
@@ -253,16 +256,16 @@ void PowerMeterApp::compute_task()
         }
 
         DisplayTaskMessage qmsg {
-            .type = MessageType::ComputeResultMessage,
-            .compute_result = {
+            .type = MessageType::ResultMessage,
+            .result = {
                 .v_rms = m_v_rms,
                 .i_rms = m_i_rms,
                 .apparent_power = m_apparent_power,
                 .real_power = m_real_power,
                 .energy = m_accumulated_energy,
-                .cos_phi = m_cos_phi,
+                //.cos_phi = m_cos_phi,
                 .frequency = m_frequency,
-                .m_vi_shift = m_vi_sample_shift,
+                //.vi_shift = m_vi_sample_shift,
             },
         };
         if (xQueueSend(m_display_queue, &qmsg, 0) != pdPASS) {

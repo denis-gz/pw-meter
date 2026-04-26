@@ -74,8 +74,8 @@ void IRAM_ATTR Button::handler()
     if (m_level == level) {
         if (level)                  // High level - button remains released
             m_depress_time = 0;
-        else
-            m_release_time = 0;     // Low level - button remains depressed
+        else                        // Low level - button remains depressed
+            m_release_time = 0;
     }
     else {                          // Level changed
         if (level)
@@ -87,10 +87,10 @@ void IRAM_ATTR Button::handler()
     m_level = level;                // Store actual values
     m_sample_time = now_time;
 
-    if (m_level == 0
-        && m_depress_time   // Exclude consequtive depress or release events
+    if (m_level == 1                // High level - button is released
+        && m_depress_time           // Exclude consequtive depress or release events
         && m_release_time
-        && m_depress_time - m_release_time > HIGH_STATE_GUARD_INTERVAL_US)
+        && m_release_time - m_depress_time > HIGH_STATE_GUARD_INTERVAL_US)
     {
         m_on_click(m_release_time - m_depress_time > HIGH_STATE_LONG_CLICK_INTERVAL_US);
     }

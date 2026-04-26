@@ -8,6 +8,13 @@ idf_component_register(
     esp_driver_spi
     esp_timer
     esp_event
+    esp_netif
+    esp_wifi
+    esp_http_client
+    app_update
+    nvs_flash
+    mqtt
+    lwip
   INCLUDE_DIRS "."
 )
 

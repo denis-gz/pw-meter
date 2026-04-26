@@ -54,7 +54,7 @@ public:
         reset();
     }
 
-    float process(float new_reading) {
+    float process(float new_reading, int* rapid_change = nullptr) {
         if (std::isnan(current_value)) {
             current_value = new_reading;
             return current_value;
@@ -73,6 +73,8 @@ public:
         if (is_statistical_jump || is_absolute_jump) {
             current_value = new_reading; // Snap!
             variance = diff * diff;      // Reset variance to new baseline
+            if (rapid_change)
+                *rapid_change = 5;       // Will be used as a counter for inversion timer
         }
         else {
             // With alpha = 0.45, this will settle smoothly in exactly 1 second
