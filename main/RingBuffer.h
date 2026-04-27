@@ -63,4 +63,9 @@ public:
         }
         return Size - current_tail + current_head;
     }
+
+    void reset() {
+        head.store(0, std::memory_order_release);
+        tail.store(0, std::memory_order_release);
+    }
 };

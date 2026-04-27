@@ -6,7 +6,7 @@
 
 #define countof(ARRAY) (sizeof(ARRAY) / sizeof(ARRAY[0]))
 
-static const char *TAG = "pw-meter";
+extern const char* const TAG;
 
 template <typename F, class T, typename R, typename... Args>
 F member_cast(R (T::*member_ptr)(Args...))

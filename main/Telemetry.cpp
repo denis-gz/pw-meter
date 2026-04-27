@@ -3,7 +3,6 @@
 #include <nvs_flash.h>
 #include <esp_netif_sntp.h>
 #include <esp_wifi.h>
-#include <esp_sntp.h>
 #include <mqtt_client.h>
 
 #include "wifi_creds.h"
@@ -15,14 +14,13 @@
 
 void PowerMeterApp::telemetry_task()
 {
-    const TickType_t xTimeout = pdMS_TO_TICKS(100);
     ESP_LOGI(TAG, "telemetry_task: started");
 
     MqttMessage qmsg;
     while (!m_stop_tasks) {
-        if (xQueueReceive(m_telemetry_queue, &qmsg, xTimeout)) {
+        if (xQueueReceive(m_telemetry_queue, &qmsg, pdMS_TO_TICKS(100))) {
             publish_mqtt_message(qmsg);
-            ESP_LOGI(TAG, "MQTT: Published message");
+            //ESP_LOGI(TAG, "MQTT: Published message");
         }
     }
 
@@ -63,12 +61,14 @@ void PowerMeterApp::setup_wifi(bool disposing)
     if (disposing) {
         esp_netif_sntp_deinit();
 
-        if (m_mqtt_handle) {
-            esp_mqtt_client_stop(m_mqtt_handle);
-            esp_mqtt_client_unregister_event(m_mqtt_handle, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event));
-            esp_mqtt_client_destroy(m_mqtt_handle), m_mqtt_handle = nullptr;
+        if (m_mqtt) {
+            esp_mqtt_client_stop(m_mqtt);
+            esp_mqtt_client_unregister_event(m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event));
+            esp_mqtt_client_destroy(m_mqtt);
+            m_mqtt = nullptr;
         }
 
+        esp_wifi_disconnect();
         esp_wifi_stop();
         esp_wifi_deinit();
 
@@ -147,22 +147,21 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(m_wifi_event_group, WIFI_CONNECTED_BIT);
         post_log({ "Wi-Fi ready" });
-        esp_netif_sntp_sync_wait(pdMS_TO_TICKS(3000));
 
         auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
         if (!(uxBits & MQTT_STARTED_BIT)) {
             esp_mqtt_client_config_t mqtt_cfg {};
             mqtt_cfg.broker.address.uri = MQTT_BROKER_URI;
 
-            m_mqtt_handle = esp_mqtt_client_init(&mqtt_cfg);
+            m_mqtt = esp_mqtt_client_init(&mqtt_cfg);
             ESP_ERROR_CHECK(esp_mqtt_client_register_event(
-                m_mqtt_handle, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event), this));
+                m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event), this));
 
-            ESP_ERROR_CHECK(esp_mqtt_client_start(m_mqtt_handle));
+            ESP_ERROR_CHECK(esp_mqtt_client_start(m_mqtt));
             xEventGroupSetBits(m_wifi_event_group, MQTT_STARTED_BIT);
         }
         else {
-            esp_mqtt_client_reconnect(m_mqtt_handle);
+            esp_mqtt_client_reconnect(m_mqtt);
         }
     }
 }
@@ -172,29 +171,29 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
     auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT | MQTT_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
     if (uxBits & WIFI_CONNECTED_BIT) {
         if (uxBits & MQTT_CONNECTED_BIT) {
-            char buf[sizeof(display_line_t)];
-            int buf_len;
+            string_t buf;
+            size_t len;
 
-            buf_len = snprintf(buf, sizeof(buf), "%.0f", msg.f_v);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/voltage", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.0f", msg.f_v);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/voltage", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.2f", msg.f_i);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/current", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_i);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/current", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.1f", msg.f_va);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/full_power", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_va);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/full_power", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.1f", msg.f_w);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/real_power", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_w);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/real_power", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.2f", msg.f_wh);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/energy", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_wh);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/energy", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.2f", msg.f_pf);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/power_factor", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_pf);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/power_factor", buf.data(), len, 0, 0);
 
-            buf_len = snprintf(buf, sizeof(buf), "%.2f", msg.f_hz);
-            esp_mqtt_client_publish(m_mqtt_handle, MQTT_PUB_TOPIC "/frequency", buf, buf_len, 0, 0);
+            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_hz);
+            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/frequency", buf.data(), len, 0, 0);
         }
         else {
             post_log({ "MQTT not ready" });
@@ -203,4 +202,19 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
     else {
         post_log({ "Wi-Fi disconnect" });
     }
+}
+
+void PowerMeterApp::set_wifi_ssid(string_t value)
+{
+    ESP_LOGI(TAG, "New Wi-Fi SSID: %s", value.data());
+
+    wifi_config_t wifi {};
+    esp_wifi_get_config(WIFI_IF_STA, &wifi);
+    memcpy(wifi.sta.ssid, value.data(), std::min(sizeof(wifi.sta.ssid), strlen(value.data())));
+    esp_wifi_set_config(WIFI_IF_STA, &wifi);
+}
+
+void PowerMeterApp::set_wifi_password(string_t value)
+{
+    ESP_LOGI(TAG, "New Wi-Fi password: %s", value.data());
 }

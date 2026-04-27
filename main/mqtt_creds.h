@@ -2,4 +2,4 @@
 
 
 #define MQTT_BROKER_URI "mqtt://broker.hivemq.com"
-#define MQTT_PUB_TOPIC  "EMB1/denis/pw-meter"
+#define MQTT_PUB_TOPIC  "EXAMPLE/owner/pw-meter"

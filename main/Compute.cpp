@@ -1,6 +1,5 @@
 #include "PowerMeterApp.h"
 
-#include <float.h>
 #include <esp_log.h>
 #include <esp_dsp.h>
 
@@ -11,12 +10,9 @@ void PowerMeterApp::compute_task()
     ESP_LOGI(TAG, "compute_task: started");
 
     // These will contain the centered AC_V and AC_I values
-    float v_array[CHUNK_SIZE] = {};
-    float i_array[CHUNK_SIZE] = {};
-
-    // We will also build a new, perfectly aligned current array of exactly 819 samples,
-    // to accomodate 4 samples phase shift
-    float aligned_v_array[CHUNK_SIZE] = {};
+    auto v_array = new float[CHUNK_SIZE];
+    auto i_array = new float[CHUNK_SIZE];
+    auto aligned_v_array = new float[CHUNK_SIZE];
 
     // This is used to save the last 4 samples of the previous chunk since the current
     // goes ahead of voltage due to LM358 singal processing delay
@@ -25,49 +21,35 @@ void PowerMeterApp::compute_task()
     uint64_t display_task_trigger = 0;
 
     while (!m_stop_tasks) {
+        // Wait notification from reader_task
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+
         // Check if we have enough samples in BOTH buffers to do a full calculation
         if (m_v_ring_buffer.available() >= CHUNK_SIZE &&
             m_i_ring_buffer.available() >= CHUNK_SIZE) {
 
             // Sacrifice the first chunk to perform initial DC bias learning
             if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
+                double v_sum = 0;
+                double i_sum = 0;
                 for (int i = 0; i < CHUNK_SIZE; i++) {
                     float raw_v, raw_i;
                     m_v_ring_buffer.pop(raw_v);
                     m_i_ring_buffer.pop(raw_i);
                     v_array[i] = raw_v;
                     i_array[i] = raw_i;
+                    v_sum += raw_v;
+                    i_sum += raw_i;
                 }
-                {   float maxV = -FLT_MAX;
-                    float minV = FLT_MAX;
-                    for (int i = 0; i < CHUNK_SIZE; i++) {
-                        if (maxV < v_array[i])
-                            maxV = v_array[i];
-                        if (minV > v_array[i])
-                            minV = v_array[i];
-                        //ESP_LOGI(TAG, "Initial V: %04d %0.1f", i, v_array[i]);
-                        //if (i % 100 == 0)
-                        //    vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    float v_bias = (maxV + minV) / 2.0f;
-                    m_v_dc_blocker.set_current_dc_bias(v_bias);
-                    ESP_LOGI(TAG, "V DC bias: minV = %0.1f, maxV = %0.1f, bias = %0.1f\n", minV, maxV, v_bias);
-                }
-                {   float maxV = -FLT_MAX;
-                    float minV = FLT_MAX;
-                    for (int i = 0; i < CHUNK_SIZE; i++) {
-                        if (maxV < i_array[i])
-                            maxV = i_array[i];
-                        if (minV > i_array[i])
-                            minV = i_array[i];
-                        //ESP_LOGI(TAG, "Initial I: %04d %0.1f", i, i_array[i]);
-                        //if (i % 100 == 0)
-                        //    vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    float i_bias = (maxV + minV) / 2.0f;
-                    m_i_dc_blocker.set_current_dc_bias(i_bias);
-                    ESP_LOGI(TAG, "I DC bias: minV = %0.1f, maxV = %0.1f, bias = %0.1f\n", minV, maxV, i_bias);
-                }
+                float v_mean = v_sum / CHUNK_SIZE;
+                float i_mean = i_sum / CHUNK_SIZE;
+
+                m_v_dc_blocker.set_current_dc_bias(v_mean);
+                ESP_LOGI(TAG, "V DC bias: %0.1f", v_mean);
+
+                m_i_dc_blocker.set_current_dc_bias(i_mean);
+                ESP_LOGI(TAG, "I DC bias: %0.1f", i_mean);
+
                 // Save 4 last centered bytes for the next chunk
                 for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
                     prev_v_history[i] = m_v_dc_blocker.process(v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT + i]);
@@ -86,9 +68,9 @@ void PowerMeterApp::compute_task()
 
             // Get first 4 samples from the previous chunk
             memcpy(&aligned_v_array[0], &prev_v_history[0], LM_COARS_SAMPLES_SHIFT * sizeof(float));
-            // Fill the rest 815 samples from the current chunk
+            // Fill the rest 815 samples from the voltage chunk
             memcpy(&aligned_v_array[LM_COARS_SAMPLES_SHIFT], &v_array[0], (CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT) * sizeof(float));
-            // Save the last 4 samples of the current chunk for the next reading
+            // Save the last 4 samples of the voltage chunk for the next reading
             memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT], LM_COARS_SAMPLES_SHIFT * sizeof(float));
 
             // **** DEBUG *****
@@ -229,7 +211,7 @@ void PowerMeterApp::compute_task()
             m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * V_COEF;
             m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * I_COEF;
 
-            if (m_i_rms < CURRENT_NOISE_FLOOR) {
+            if (m_i_rms < m_i_noise_floor) {
                 m_i_rms = 0.0f;
                 m_apparent_power = 0.0f;
                 m_real_power = 0.0f;
@@ -244,35 +226,34 @@ void PowerMeterApp::compute_task()
                 real_pwr *= V_COEF * I_COEF;                // Watts
                 m_real_power = real_pwr;
 
-                // 819 samples at 4096Hz is exactly 0.199951 seconds (0.00005554 hours)
-                const double CHUNK_TIME_HOURS = (static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ) / 3600.0;
-                m_accumulated_energy += (double) m_real_power * CHUNK_TIME_HOURS;
+                // 800 samples at 4000Hz is exactly 0.2 seconds (0.00005556 hours)
+                const double CHUNK_TIME = (static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ);
+                m_acc_energy_ws += m_real_power * CHUNK_TIME;
             }
-        }
-        else {
-            // Yield to the RTOS scheduler for a few milliseconds while buffers fill
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
 
-        DisplayTaskMessage qmsg {
-            .type = MessageType::ResultMessage,
-            .result = {
-                .v_rms = m_v_rms,
-                .i_rms = m_i_rms,
-                .apparent_power = m_apparent_power,
-                .real_power = m_real_power,
-                .energy = m_accumulated_energy,
-                //.cos_phi = m_cos_phi,
-                .frequency = m_frequency,
-                //.vi_shift = m_vi_sample_shift,
-            },
-        };
-        if (xQueueSend(m_display_queue, &qmsg, 0) != pdPASS) {
-            ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+            InterfaceTaskMessage qmsg {
+                .type = MessageType::ResultMessage,
+                .result = {
+                    .v_rms = m_v_rms,
+                    .i_rms = m_i_rms,
+                    .apparent_power = m_apparent_power,
+                    .real_power = m_real_power,
+                    .energy = m_acc_energy_ws / 3600.0,
+                    //.cos_phi = m_cos_phi,
+                    .frequency = m_frequency,
+                    //.vi_shift = m_vi_sample_shift,
+                },
+            };
+            if (xQueueSend(m_interface_queue, &qmsg, 0) != pdPASS) {
+                ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+            }
         }
     }
 
+    delete[] aligned_v_array;
+    delete[] i_array;
+    delete[] v_array;
+
     ESP_LOGI(TAG, "compute_task: finished");
-    vTaskDelete(nullptr);
+    vTaskDelete(m_compute_task = nullptr);
 }

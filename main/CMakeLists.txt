@@ -14,7 +14,6 @@ idf_component_register(
     app_update
     nvs_flash
     mqtt
-    lwip
   INCLUDE_DIRS "."
 )
 
