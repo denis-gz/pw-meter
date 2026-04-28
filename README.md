@@ -47,6 +47,14 @@ The software consists of 5 tasks:
 
 The `PowerMeterApp` class represents the main class which initializes all tasks and waits for a stop event. It handles task shutdown, and the `app_main()` function recreates the instance if needed.
 
+## Signal Path
+
+![Splash Screen](/docs/SignalPathDiagram.png)
+
+## Data Flow
+
+![Splash Screen](/docs/DataFlowDiagram.png)
+
 ## Technology
 
 * **CPU:** Espressif ESP32-S3-WROOM-1 N16R2 module
