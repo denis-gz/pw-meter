@@ -1,64 +1,75 @@
-﻿# PW Meter - EMB_1 graduation project
+# PW Meter - EMB_1 Graduation Project
 
-Power Meter - an appliance to measure and log the mains AC grid parameters
+![Splash Screen](/resources/dither_it_Gemini_Generated_Image_hjzm7lhjzm7lhjzm.png)
 
-## The appliance can be attached to the AC mains load, and allows to measure the following parameters:
+## Power Meter - An appliance to measure and log AC power line parameters
 
- - Voltage (V)
- - Current (A)
- - Instantious active power (W)
- - Instantious apparent power (VA)
- - Power factor, both true and displacement (W/VA and cos_φ)
- - AC frequency (Hz)
- - Total Harmonic Distortions (%)
+The Power Meter can be attached to the AC mains load to measure the following parameters:
 
+ - **AC Voltage** (V, RMS)
+ - **AC Current** (A, RMS)
+ - **Instantaneous active power** (W)
+ - **Instantaneous apparent power** (VA)
+ - **Accumulated energy** (Wh)
+ - **Power factor** (W/VA ratio)
+ - **AC frequency** (Hz)
 
 ## Quick Start
 
-1. Connect AC voltage to the Voltage transformer module (U6)
-2. Choose a Line wire of AC load and put it inside the core of current transformer. Connect the current transformer to J2 socket.
-3. Connect 7-30V DC power to the J1 socket
-4. The Power Meter starts working immediately, displaying the data on OLED display
+In case you have assembled the board using the schematic and components specified in the KiCad project, follow these steps to bring it to life:
 
-## Architecture
+1. You may use the supplied firmware image or build your own. If building from source, please update `mqtt_cred.h` and `wifi_creds.h` files with your credentials (not necessary if you do not require MQTT telemetry).
+2. To build the firmware image, use standard **ESP-IDF** tools (CMake, idf.py, etc). The project was developed with ESP-IDF **v5.5.4** using **QtCreator** as the IDE. The third-party library `nopnop2002/ssd1306` is used to handle the **OLED** display.
+3. Flash the firmware via USB Serial/JTAG interface (hold the **BOOT** key while powering on the board). The ESP32's **UART0** interface is also available on the **J3** header for flashing or serial console access (useful for adjusting parameters at runtime).
+4. Connect the AC voltage source to the Voltage Transformer module (**U6** sub-board).
+5. Pass the **Live** wire of the AC load through the core of the Current Transformer (**SCT013-100** or similar). For low-power loads, wrap the wire around the transformer core several times to amplify the signal. Alternatively, use a sensor with a lower current range. If your sensor includes an internal burden resistor, you may need to desolder the **R3** resistor from the board. Connect the Current Transformer to the **J2** socket. It is also possible to use the PW Meter without a load; in this case, set the `I noise floor` parameter high enough to prevent bogus readings.
+6. Connect a **7-30V DC** power source to the **J1** socket. The board itself should not consume more than 5 Watts.
+7. The Power Meter starts working immediately, displaying data on the OLED display.
+8. Use the **Encoder** to switch pages. Use the Encoder's **push-button** to pause/resume on the Mains page, or to enter the menu on the Settings page. Use a **long press** (> 0.5 sec) to return to the upper level. Performing a long press while at the top level will restart the app. Use the **RES** key for a hard reset.
 
-The project consists of main board (CPU, OLED, Rotary encoder) and a sub-board - the Single-phase AC Active Output Voltage Transformer Module made by LC Technology [http://www.chinalctech.com/cpzx/Programmer/Sensor_Module/250.html]. For current input, the Split-core current transformer of type SCT013-100 is necessary [http://en.yhdc.com/comp/file/download.do?id=941]
+## Project Structure
 
-The software part consist of 5 tasks:
- - ADC sampling task (performs reading, parsing and curve-adjusting analog data, outputs raw values in mV to the ring buffer, to be consumed by Compute Task)
- - Computation task (processes data by 10-cycles chunks, performs all the math, outputs results to the queue, to be consumed by the Display Task)
- - Display task (applies statistical EMA filter, presents data on OLED display, prints to UART console)
- - Telemetry task (publishes data to the MQTT broker)
- - UI task (accepts user input from rotary encoder, presents Settings Menu or Main screen)
+### Hardware
 
-## Docs
+The project consists of a main board and two sub-boards:
+* **Voltage Transformer:** Single-phase AC Active Output Voltage Transformer by [LC Technology](http://www.chinalctech.com/cpzx/Programmer/Sensor_Module/250.html).
+* **Display:** SSD1315 128x64 monochrome I2C OLED (GM009605). Any other SSD1306 I2C compatible display should also work (check the module's address in `idf.py menuconfig`).
+* **Current Sensor:** Split-core Current Transformer [SCT013-100](http://en.yhdc.com/comp/file/download.do?id=941) (or similar).
 
-TBDL
+### Software
+
+The software consists of 5 tasks:
+
+* `reader_task`: ADC sampling task. Performs reading, parsing and adjustment of analog data. Outputs raw values in mV to a ring buffer for the Compute Task.
+* `compute_task`: Processes data in 10-cycle chunks. Performs all mathematical calculations and outputs results to the queue for the Interface Task.
+* `interface_task`: Applies filtering, updates the OLED display, handles user input from the rotary encoder and console. Sends a copy of the UI data to the Telemetry Task.
+* `telemetry_task`: Maintains Wi-Fi and MQTT connections and publishes data to the MQTT broker.
+* `console_input_task`: A service task created by the console event loop that handles prompts and waits for user input from the UART console.
+
+The `PowerMeterApp` class represents the main class which initializes all tasks and waits for a stop event. It handles task shutdown, and the `app_main()` function recreates the instance if needed.
 
 ## Technology
 
- - CPU: Espressif ESP32-S3-WROOM-1 N16R2 module
- - AC voltage input: ZMPT101B transformer, paired with LM358 op-amp
- - AC current input: Split-core current transformer of type SCT013-100 (100A, 2000:1 ratio)
- - Display: GM009605 OLED module, connected by I2C bus
- - Input: PEC11R rotary encoder
- - Debugging and firmware update: BOOT and RESET buttons, UART and USB Type-C JTAG/Serial ports
- - Software: ESP-IDF v5.5.4-based CMake project, developed with QtCreator v18.0.2
- - Hardware: 4-layer standard type FR-4 PCB, sized 100x50 mm, developed in KiCad 9.0.7, fabricated and assembled using JLCPCB services. Mostly SMT components used, of size 0805 and 0603.
- - Third-party components:
-   - nopnop2002/ssd1306 - OLED display support
-   - esp-idf-lib/i2cdev - I2C bus support
+* **CPU:** Espressif ESP32-S3-WROOM-1 N16R2 module
+* **AC Voltage Input:** ZMPT101B transformer paired with an LM358 op-amp
+* **AC Current Input:** SCT013-100 Split-core current transformer (100A, 2000:1 ratio)
+* **Display:** GM009605 OLED module based on SSD1315 controller (I2C bus)
+* **Input:** PEC11R rotary encoder
+* **Debugging:** BOOT and RESET buttons, UART, and USB Type-C JTAG/Serial ports
+* **Software:** ESP-IDF v5.5.4-based CMake project, developed with QtCreator v18.0.2
+* **Hardware:** 4-layer FR-4 PCB (100x50 mm), developed in KiCad 9.0.7, fabricated/assembled via JLCPCB. Mostly SMT components (0805 and 0603).
+* **Third-party components:**
+    * `nopnop2002/ssd1306`: OLED display support
 
-## Results
+## Example Output
 
-TBDL
+![Splash Screen](/docs/photos/IMG_20260428_061512.jpg) ![Mains Page](/docs/photos/IMG_20260428_042619_479.jpg) ![Device Page](/docs/photos/IMG_20260428_042630_639.jpg) ![Network Page](/docs/photos/IMG_20260428_042640_663.jpg) ![Settings Page](/docs/photos/IMG_20260428_061856_930.jpg) ![Parameter Page](/docs/photos/IMG_20260428_061908_271.jpg) ![Log Page](/docs/photos/IMG_20260428_042702_820.jpg) ![About Page](/docs/photos/IMG_20260428_042713_516.jpg)
 
 ## Author
 
-Copyright © Denys Zavorotnyi, 2026
-
+Copyright © Denys Zavorotnyi, 2026  
 E-mail: denis.gz@gmail.com
 
 ## License
 
-TBDL
+[MIT License](LICENSE)
