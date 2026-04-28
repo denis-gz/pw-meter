@@ -336,9 +336,8 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                 snprintf(ds.lines[0].data(), sizeof(display_line_t), "----- Log ------");
                 auto j = ds.log.begin();
                 for (int i = 1; i < countof(ds.lines); i++) {
-                    if (ds.log.size() >= i) {
-                        auto log_line = *j++;
-                        ds.lines[i] = log_line;
+                    if (j != ds.log.end()) {
+                        ds.lines[i] = *j++;
                     }
                 }
             }
@@ -535,7 +534,9 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                         esp_wifi_get_config(WIFI_IF_STA, &wifi);
                         memset(wifi.sta.ssid, 0, sizeof(wifi.sta.ssid));
                         memcpy(wifi.sta.ssid, ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(ssid.data())));
+                        esp_wifi_disconnect();
                         esp_wifi_set_config(WIFI_IF_STA, &wifi);
+                        esp_wifi_connect();
                         break;
                     }
                     case ItemWifiPassword: {
@@ -546,7 +547,9 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                         esp_wifi_get_config(WIFI_IF_STA, &wifi);
                         memset(wifi.sta.password, 0, sizeof(wifi.sta.password));
                         memcpy(wifi.sta.password, passw.data(), std::min(sizeof(wifi.sta.password), strlen(passw.data())));
+                        esp_wifi_disconnect();
                         esp_wifi_set_config(WIFI_IF_STA, &wifi);
+                        esp_wifi_connect();
                         break;
                     }
                     default:
