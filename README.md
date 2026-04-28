@@ -34,7 +34,6 @@ In case you have assembled the board using the schematic and components specifie
 The project consists of a main board and two sub-boards:
 * **Voltage Transformer:** Single-phase AC Active Output Voltage Transformer by [LC Technology](http://www.chinalctech.com/cpzx/Programmer/Sensor_Module/250.html).
 * **Display:** SSD1315 128x64 monochrome I2C OLED (GM009605). Any other SSD1306 I2C compatible display should also work (check the module's address in `idf.py menuconfig`).
-* **Current Sensor:** Split-core Current Transformer [SCT013-100](http://en.yhdc.com/comp/file/download.do?id=941) (or similar).
 
 ### Software
 
@@ -52,7 +51,7 @@ The `PowerMeterApp` class represents the main class which initializes all tasks 
 
 * **CPU:** Espressif ESP32-S3-WROOM-1 N16R2 module
 * **AC Voltage Input:** ZMPT101B transformer paired with an LM358 op-amp
-* **AC Current Input:** SCT013-100 Split-core current transformer (100A, 2000:1 ratio)
+* **AC Current Input:** [SCT013-100](http://en.yhdc.com/comp/file/download.do?id=941) Split-core current transformer (100A, 2000:1 ratio)
 * **Display:** GM009605 OLED module based on SSD1315 controller (I2C bus)
 * **Input:** PEC11R rotary encoder
 * **Debugging:** BOOT and RESET buttons, UART, and USB Type-C JTAG/Serial ports
@@ -68,7 +67,6 @@ The `PowerMeterApp` class represents the main class which initializes all tasks 
 ## Author
 
 Copyright © Denys Zavorotnyi, 2026  
-E-mail: denis.gz@gmail.com
 
 ## License
 
