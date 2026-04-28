@@ -56,9 +56,9 @@ The `PowerMeterApp` class represents the main class which initializes all tasks 
 * **Input:** PEC11R rotary encoder
 * **Debugging:** BOOT and RESET buttons, UART, and USB Type-C JTAG/Serial ports
 * **Software:** ESP-IDF v5.5.4-based CMake project, developed with QtCreator v18.0.2
-* **Hardware:** 4-layer FR-4 PCB (100x50 mm), developed in KiCad 9.0.7, fabricated/assembled via JLCPCB. Mostly SMT components (0805 and 0603).
 * **Third-party components:**
     * `nopnop2002/ssd1306`: OLED display support
+* **PCB:** 4-layer FR-4 PCB (100x50 mm), developed in KiCad 9.0.7, fabricated/assembled via JLCPCB. Mostly SMT components (0805 and 0603).
 
 ## Example Output
 
