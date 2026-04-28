@@ -18,7 +18,7 @@ The Power Meter can be attached to the AC mains load to measure the following pa
 
 In case you have assembled the board using the schematic and components specified in the KiCad project, follow these steps to bring it to life:
 
-1. You may use the supplied firmware image or build your own. If building from source, please update `mqtt_cred.h` and `wifi_creds.h` files with your credentials (not necessary if you do not require MQTT telemetry).
+1. You may use the supplied firmware image or build your own. If building from source, please update `mqtt_cred.h` and `wifi_creds.h` files with your credentials (not necessary if you do not require MQTT telemetry). Also, please verify settings in the `sdkconfig` to match actual hardware (since at the time of this writing the project has not been yet tested with the actual/final PCB). Use usual `idf.py menuconfig` command to re-generate the `sdkconfig`.
 2. To build the firmware image, use standard **ESP-IDF** tools (CMake, idf.py, etc). The project was developed with ESP-IDF **v5.5.4** using **QtCreator** as the IDE. The third-party library `nopnop2002/ssd1306` is used to handle the **OLED** display.
 3. Flash the firmware via USB Serial/JTAG interface (hold the **BOOT** key while powering on the board). The ESP32's **UART0** interface is also available on the **J3** header for flashing or serial console access (useful for adjusting parameters at runtime).
 4. Connect the AC voltage source to the Voltage Transformer module (**U6** sub-board).
