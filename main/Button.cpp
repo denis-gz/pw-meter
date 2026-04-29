@@ -11,7 +11,7 @@ std::once_flag Button::s_isr_service_flag;
 
 // How much time a pin should have the HIGH level to clear button depressed state
 constexpr const int64_t HIGH_STATE_GUARD_INTERVAL_US = 10 * 1000LL;         // 10 ms
-constexpr const int64_t HIGH_STATE_LONG_CLICK_INTERVAL_US = 500 * 1000LL;   // 500 ms
+constexpr const int64_t HIGH_STATE_LONG_CLICK_INTERVAL_US = 350 * 1000LL;   // 350 ms
 
 
 Button::Button(int pin, callback_t on_click)

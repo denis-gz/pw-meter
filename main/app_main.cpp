@@ -19,9 +19,6 @@ extern "C" void app_main() {
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Wait 500ms for the 10uF capacitor to fully charge and settle at 1.65V
-    vTaskDelay(pdMS_TO_TICKS(500));
-
     do {
         auto app = std::make_unique<PowerMeterApp>();
 

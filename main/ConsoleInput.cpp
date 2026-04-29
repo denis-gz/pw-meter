@@ -11,6 +11,7 @@ void PowerMeterApp::setup_console_input(bool disposing)
         esp_event_loop_delete(m_console_event_loop);
     }
     else {
+        ESP_LOGI(TAG, "console input setup");
         esp_event_loop_args_t args {
             .queue_size = 5,
             .task_name = "console_input_task",
@@ -19,7 +20,6 @@ void PowerMeterApp::setup_console_input(bool disposing)
             .task_core_id = xPortGetCoreID(),
         };
         ESP_ERROR_CHECK(esp_event_loop_create(&args, &m_console_event_loop));
-
         ESP_ERROR_CHECK(esp_event_handler_register_with(m_console_event_loop,
             EVENT_CONSOLE_INPUT, ESP_EVENT_ANY_ID,
             member_cast<esp_event_handler_t>(&PowerMeterApp::on_console_input_event), this
@@ -71,13 +71,13 @@ void PowerMeterApp::on_console_input_event(esp_event_base_t event_base, int32_t 
             break;
     }
     if (xQueueSend(m_interface_queue, &qmsg, pdMS_TO_TICKS(200)) != pdPASS) {
-        ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+        ESP_LOGW(TAG, "Interface queue is full, dropping ConsoleInputMessage");
     }
 }
 
 bool PowerMeterApp::input_value(int& value)
 {
-    string_t input;
+    string_t input {};
     if (get_console_input(input.data(), sizeof(input))) {
         char* endptr;
         int val = strtod(input.data(), &endptr);
@@ -91,7 +91,7 @@ bool PowerMeterApp::input_value(int& value)
 
 bool PowerMeterApp::input_value(float& value)
 {
-    string_t input;
+    string_t input {};
     if (get_console_input(input.data(), sizeof(input))) {
         char* endptr;
         float val = strtof(input.data(), &endptr);
@@ -105,7 +105,7 @@ bool PowerMeterApp::input_value(float& value)
 
 bool PowerMeterApp::input_value(string_t& value)
 {
-    string_t input;
+    string_t input {};
     if (get_console_input(input.data(), sizeof(input))) {
         value = input;
         return true;

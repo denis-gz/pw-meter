@@ -14,6 +14,7 @@
 #include "Compute.h"
 #include "ConsoleInput.h"
 #include "Interface.h"
+#include "Telemetry.h"
 
 // 4000 Hz per channel * 2 channels = 8000 Hz total sampling frequency
 #define SAMPLE_FREQ_HZ  8000
@@ -38,6 +39,8 @@ const float I_NOISE_FLOOR = 0.12f; // 120 mA
 
 const float V_COEF = 0.55f;
 const float I_COEF = 0.0262f;
+
+constexpr bool kDisposing = true;
 
 typedef std::array<char, 17> display_line_t;
 typedef std::array<char, 64> string_t;
@@ -123,7 +126,7 @@ private:
 
     void setup_reader(bool disposing = false);
     void setup_interface(bool disposing = false);
-    void setup_tasks();
+    void start_tasks();
     void stop_tasks();
 
     void setup_telemetry(bool disposing = false);
@@ -142,7 +145,7 @@ private:
     void on_wifi_event(esp_event_base_t event_base, int32_t event_id, void* event_data);
     void publish_mqtt_message(const MqttMessage& msg);
     void set_wifi_ssid(string_t value);
-    void set_wifi_password(string_t value);
+    void set_wifi_pass(string_t value);
 
     void process_result(const ResultMessage& result);
     void process_encoder_input(const EncoderInputMessage& result);
@@ -193,6 +196,11 @@ private:
     //float m_vi_sample_shift = 0;
     double m_acc_energy_ws = 0;
     float m_i_noise_floor = I_NOISE_FLOOR;
+
+    // ***** DEBUG *****
+    //volatile uint32_t m_error_count = 0;
+    //volatile uint32_t m_phase_shift = 0;
+    // *****
 
     volatile bool m_stop_tasks = false;
 

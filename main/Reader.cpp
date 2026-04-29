@@ -3,11 +3,13 @@
 void PowerMeterApp::setup_reader(bool disposing)
 {
     if (disposing) {
+        adc_continuous_stop(m_adc);
         adc_continuous_deinit(m_adc), m_adc = nullptr;
         adc_cali_delete_scheme_curve_fitting(m_adc_v_cali), m_adc_v_cali = nullptr;
         adc_cali_delete_scheme_curve_fitting(m_adc_i_cali), m_adc_i_cali = nullptr;
     }
     else {
+        ESP_LOGI(TAG, "reader setup");
         adc_unit_t adc_unit_id = {};
         ESP_ERROR_CHECK(adc_continuous_io_to_channel(CONFIG_PIN_ADC_V, &adc_unit_id, &m_adc_v_channel_id));
         if (adc_unit_id != ADC_UNIT_1)
@@ -68,6 +70,7 @@ void PowerMeterApp::setup_reader(bool disposing)
         };
         ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&adc_i_cali_config, &m_adc_i_cali));
 
+        ESP_ERROR_CHECK(adc_continuous_start(m_adc));
         ESP_LOGI(TAG, "ADC DMA Initialized");
     }
 }
@@ -78,7 +81,7 @@ void PowerMeterApp::reader_task()
     auto parsed_buf = new adc_continuous_data_t[SAMPLES_TO_READ];
     uint32_t samples_count = 0;
 
-    ESP_ERROR_CHECK(adc_continuous_start(m_adc));
+    setup_reader();
 
     while (!m_stop_tasks) {
         // Block and wait for a chunk of data from DMA
@@ -89,6 +92,7 @@ void PowerMeterApp::reader_task()
                 if (!parsed_buf[i].valid) {
                     m_v_ring_buffer.reset();
                     m_i_ring_buffer.reset();
+                    //m_error_count++;
                     break;
                 }
                 if (parsed_buf[i].channel == m_adc_v_channel_id) {
@@ -106,14 +110,16 @@ void PowerMeterApp::reader_task()
                 xTaskNotifyGive(m_compute_task);
         }
         else if (ret == ESP_ERR_TIMEOUT) {
+            //m_error_count++;
             continue;
         }
         else {
-            //++m_err_count;
+            //m_error_count++;
         }
     }
 
-    adc_continuous_stop(m_adc);
+    setup_reader(kDisposing);
+
     delete[] parsed_buf;
     ESP_LOGI(TAG, "reader_task: finished");
     vTaskDelete(nullptr);

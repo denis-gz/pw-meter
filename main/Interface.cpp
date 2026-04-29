@@ -93,11 +93,22 @@ void PowerMeterApp::setup_interface(bool disposing)
         vQueueDelete(m_interface_queue), m_interface_queue = nullptr;
     }
     else {
+        ESP_LOGI(TAG, "interface setup");
         m_interface_queue = xQueueCreate(10, sizeof(InterfaceTaskMessage));
 
         i2c_master_init(&m_oled, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
 
-        esp_err_t res = ssd1306_init(&m_oled, 128, 64);
+        int retries = 5;
+        esp_err_t res;
+
+        while (retries--) {
+            res = ssd1306_init(&m_oled, 128, 64);
+            if (res == ESP_OK)
+                break;
+            ESP_LOGI(TAG, "Retrying in 50 msec...");
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
         if (res == ESP_OK) {
             ssd1306_clear_screen(&m_oled, false);
             ssd1306_contrast(&m_oled, 0xFF);
@@ -117,12 +128,12 @@ void PowerMeterApp::setup_interface(bool disposing)
 
 void PowerMeterApp::interface_task()
 {
-    const TickType_t xTimeout = pdMS_TO_TICKS(100);
-    ESP_LOGI(TAG, "display_task: started");
+    ESP_LOGI(TAG, "interface_task: started");
+    setup_interface();
 
     InterfaceTaskMessage qmsg;
     while (!m_stop_tasks) {
-        if (xQueueReceive(m_interface_queue, &qmsg, xTimeout)) {
+        if (xQueueReceive(m_interface_queue, &qmsg, pdMS_TO_TICKS(100))) {
             switch (qmsg.type) {
                 case MessageType::ResultMessage:
                     process_result(qmsg.result);
@@ -140,7 +151,8 @@ void PowerMeterApp::interface_task()
         }
     };
 
-    ESP_LOGI(TAG, "display_task: finished");
+    setup_interface(kDisposing);
+    ESP_LOGI(TAG, "interface_task: finished");
     vTaskDelete(nullptr);
 }
 
@@ -174,7 +186,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
 
     if (ds.counter % 15 == 0) { // Roughly 3 sec
         if (xQueueSend(m_telemetry_queue, &m, 0) != pdPASS) {
-            ESP_LOGI(TAG, "Warning: Telemetry queue is full, dropping message\n");
+            ESP_LOGW(TAG, "Telemetry queue is full, dropping MqttMessage");
         }
     }
     if (ds.pause)
@@ -300,8 +312,10 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                             case ItemWifiPassword: {
                                 wifi_config_t wifi {};
                                 esp_wifi_get_config(WIFI_IF_STA, &wifi);
+                                string_t pass {};
+                                std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) wifi.sta.password)), '*');
                                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "2. Wi-Fi passw:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", wifi.sta.password);
+                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", pass.data());
                                 break;
                             }
                             case ItemINoiseFloor: {
@@ -503,6 +517,7 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
         switch (input.action) {
             case ConsoleInputAction::Decimal:
                 ESP_LOGI(TAG, "Console input: %d", input.decimal_value);
+                ds.input_state = ItemDisplay;
                 break;
             case ConsoleInputAction::Float:
                 switch (ds.item_selected) {
@@ -524,43 +539,28 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                     default:
                         break;
                 }
+                ds.input_state = ItemDisplay;
                 break;
             case ConsoleInputAction::String:
                 switch (ds.item_selected) {
-                    case ItemWifiSsid: {
-                        const auto& ssid = input.string_value;
-                        ESP_LOGI(TAG, "Setting new Wi-Fi SSID: %s", ssid.data());
-                        wifi_config_t wifi {};
-                        esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                        memset(wifi.sta.ssid, 0, sizeof(wifi.sta.ssid));
-                        memcpy(wifi.sta.ssid, ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(ssid.data())));
-                        esp_wifi_disconnect();
-                        esp_wifi_set_config(WIFI_IF_STA, &wifi);
-                        esp_wifi_connect();
+                    case ItemWifiSsid:
+                        set_wifi_ssid(input.string_value);
+                        ds.input_state = MenuSelection;
                         break;
-                    }
-                    case ItemWifiPassword: {
-                        const auto& passw = input.string_value;
-                        size_t len = strlen(passw.data());
-                        ESP_LOGI(TAG, "Setting new Wi-Fi password: (len = %d)", len);
-                        wifi_config_t wifi {};
-                        esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                        memset(wifi.sta.password, 0, sizeof(wifi.sta.password));
-                        memcpy(wifi.sta.password, passw.data(), std::min(sizeof(wifi.sta.password), strlen(passw.data())));
-                        esp_wifi_disconnect();
-                        esp_wifi_set_config(WIFI_IF_STA, &wifi);
-                        esp_wifi_connect();
+                    case ItemWifiPassword:
+                        set_wifi_pass(input.string_value);
+                        ds.input_state = MenuSelection;
                         break;
-                    }
                     default:
+                        ds.input_state = ItemDisplay;
                         break;
                 }
                 break;
             case ConsoleInputAction::None:
                 ESP_LOGI(TAG, "Console input cancelled");
+                ds.input_state = ItemDisplay;
                 break;
         }
-        ds.input_state = ItemDisplay;
         ds.clear_lines();
     }
 }
@@ -573,7 +573,7 @@ void PowerMeterApp::on_encoder_rotate(bool is_ccw)
     };
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (xQueueSendFromISR(m_interface_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
-        ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+        ESP_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
     }
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
@@ -588,7 +588,7 @@ void PowerMeterApp::on_encoder_click(bool is_long)
     };
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (xQueueSendFromISR(m_interface_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
-        ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+        ESP_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
     }
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
@@ -597,19 +597,20 @@ void PowerMeterApp::on_encoder_click(bool is_long)
 
 void PowerMeterApp::process_log(const LogMessage& log)
 {
+    ds.log.push_back(log.message);
     while (ds.log.size() > countof(ds.lines) - 1) {
         ds.log.pop_front();
     }
-    ds.log.push_back(log.message);
 }
 
 void PowerMeterApp::post_log(display_line_t message)
 {
+    ESP_LOGI(TAG, "log event: %s", message.data());
     InterfaceTaskMessage qmsg {
         .type = MessageType::LogMessage,
         .log { .message = message }
     };
     if (xQueueSend(m_interface_queue, &qmsg, pdMS_TO_TICKS(100)) != pdPASS) {
-        ESP_LOGI(TAG, "Warning: Display queue is full, dropping LogMessage\n");
+        ESP_LOGW(TAG, "Interface queue is full, dropping LogMessage");
     }
 }

@@ -16,17 +16,16 @@ void PowerMeterApp::compute_task()
 
     // This is used to save the last 4 samples of the previous chunk since the current
     // goes ahead of voltage due to LM358 singal processing delay
-    float prev_v_history[LM_COARS_SAMPLES_SHIFT] = {};
-
-    uint64_t display_task_trigger = 0;
+    float prev_v_history[LM_COARS_SAMPLES_SHIFT] {};
 
     while (!m_stop_tasks) {
-        // Wait notification from reader_task
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
-
         // Check if we have enough samples in BOTH buffers to do a full calculation
         if (m_v_ring_buffer.available() >= CHUNK_SIZE &&
             m_i_ring_buffer.available() >= CHUNK_SIZE) {
+
+            //memset(aligned_v_array, 0, sizeof(float) * CHUNK_SIZE);
+            //memset(v_array, 0, sizeof(float) * CHUNK_SIZE);
+            //memset(i_array, 0, sizeof(float) * CHUNK_SIZE);
 
             // Sacrifice the first chunk to perform initial DC bias learning
             if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
@@ -45,10 +44,10 @@ void PowerMeterApp::compute_task()
                 float i_mean = i_sum / CHUNK_SIZE;
 
                 m_v_dc_blocker.set_current_dc_bias(v_mean);
-                ESP_LOGI(TAG, "V DC bias: %0.1f", v_mean);
+                ESP_LOGI(TAG, "ADC_V: DC bias %0.1f", v_mean);
 
                 m_i_dc_blocker.set_current_dc_bias(i_mean);
-                ESP_LOGI(TAG, "I DC bias: %0.1f", i_mean);
+                ESP_LOGI(TAG, "ADC_I: DC bias %0.1f", i_mean);
 
                 // Save 4 last centered bytes for the next chunk
                 for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
@@ -245,9 +244,12 @@ void PowerMeterApp::compute_task()
                 },
             };
             if (xQueueSend(m_interface_queue, &qmsg, 0) != pdPASS) {
-                ESP_LOGI(TAG, "Warning: Display queue is full, dropping message\n");
+                ESP_LOGW(TAG, "Interface queue is full, dropping ResultMessage");
             }
         }
+
+        // Wait notification from reader_task
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
     }
 
     delete[] aligned_v_array;
