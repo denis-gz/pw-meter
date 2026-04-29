@@ -18,7 +18,7 @@ The Power Meter can be attached to the AC mains load to measure the following pa
 
 In case you have assembled the board using the schematic and components specified in the KiCad project, follow these steps to bring it to life:
 
-1. You may use the supplied firmware image or build your own. If building from source, please update `mqtt_cred.h` and `wifi_creds.h` files with your credentials (not necessary if you do not require MQTT telemetry). Also, please verify settings in the `sdkconfig` to match actual hardware (since at the time of this writing the project has not yet been tested with the actual/final PCB). Use usual `idf.py menuconfig` command to re-generate the `sdkconfig`.
+1. You may use the supplied firmware image or build your own. If building from source, please update `mqtt_creds.h` and `wifi_creds.h` files with your credentials (not necessary if you do not require MQTT telemetry). Also, please verify settings in the `sdkconfig` to match actual hardware (since at the time of this writing the project has not yet been tested with the actual/final PCB). Use usual `idf.py menuconfig` command to re-generate the `sdkconfig`.
 2. To build the firmware image, use standard **ESP-IDF** tools (CMake, idf.py, etc). Look [here](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32/api-guides/build-system.html) for a reference.
 3. Flash the firmware via USB Serial/JTAG interface (hold the **BOOT** key while powering on the board). The ESP32's **UART0** interface is also available on the **J3** header for flashing or serial console access (useful for adjusting parameters at runtime).
 4. Connect the AC voltage source to the Voltage Transformer module (**U6** sub-board).
@@ -34,6 +34,9 @@ In case you have assembled the board using the schematic and components specifie
 The project consists of a main board and two sub-boards:
 * **Voltage Transformer:** Single-phase AC Active Output Voltage Transformer by [LC Technology](http://www.chinalctech.com/cpzx/Programmer/Sensor_Module/250.html).
 * **Display:** SSD1315 128x64 monochrome I2C OLED (GM009605). Any other SSD1306 I2C compatible display should also work (check the module's address in `idf.py menuconfig`).
+Sampling of AC voltage and current channels occur in DMA continuous mode, the rate is 4 kHz per channel, with 12 bit resolution and 11.5 dB attenuation. The samples then are then adjusted for non-linearity using pre-calibrated curves, centered at 0 level, and processed using DSP capabilities of ESP32-S3 chip. Employing hardware acceleration helps keep CPU usage reasonably low (~10% on Core 1).
+
+Please find further details on project's [Schematic](docs/hardware/Schematic_R1.pdf), and PCB board views ([Top Layer](docs/hardware/PcbTop.png), [Inner 1](docs/hardware/PcbInner1.png), [Inner 2](docs/hardware/PcbInner2.png), [Bottom Layer](docs/hardware/PcbBottom.png) and [3D View](docs/hardware/jlcpcb_3d_1.png)).
 
 ### Software
 
@@ -49,15 +52,15 @@ The `PowerMeterApp` class represents the main class which initializes all tasks 
 
 ## Signal Path
 
-![Splash Screen](/docs/SignalPathDiagram.png)
+![Signal Path](/docs/SignalPathDiagram.png)
 
 ## Data Flow
 
-![Splash Screen](/docs/DataFlowDiagram.png)
+![Data Flow](/docs/DataFlowDiagram.png)
 
 ## Technology
 
-* **CPU:** Espressif ESP32-S3-WROOM-1 N16R2 module
+* **MCU:** Espressif ESP32-S3-WROOM-1 N16R2 module
 * **AC Voltage Input:** ZMPT101B transformer paired with an LM358 op-amp
 * **AC Current Input:** [SCT013-100](http://en.yhdc.com/comp/file/download.do?id=941) Split-core current transformer (100A, 2000:1 ratio)
 * **Display:** GM009605 OLED module based on SSD1315 controller (I2C bus)
