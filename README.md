@@ -34,7 +34,8 @@ In case you have assembled the board using the schematic and components specifie
 The project consists of a main board and two sub-boards:
 * **Voltage Transformer:** Single-phase AC Active Output Voltage Transformer by [LC Technology](http://www.chinalctech.com/cpzx/Programmer/Sensor_Module/250.html).
 * **Display:** SSD1315 128x64 monochrome I2C OLED (GM009605). Any other SSD1306 I2C compatible display should also work (check the module's address in `idf.py menuconfig`).
-Sampling of AC voltage and current channels occur in DMA continuous mode, the rate is 4 kHz per channel, with 12 bit resolution and 11.5 dB attenuation. The samples then are then adjusted for non-linearity using pre-calibrated curves, centered at 0 level, and processed using DSP capabilities of ESP32-S3 chip. Employing hardware acceleration helps keep CPU usage reasonably low (~10% on Core 1).
+
+Sampling of AC voltage and current channels occur in DMA continuous mode, the rate is 4 kHz per channel, with 12 bit resolution and 11.5 dB attenuation. The samples are then adjusted for non-linearity using pre-calibrated curves, centered at 0 level, and processed using DSP capabilities of ESP32-S3 chip. Employing hardware acceleration helps keep CPU usage reasonably low (~10% on Core 1, or only 5% without display output).
 
 Please find further details on project's [Schematic](docs/hardware/Schematic_R1.pdf), and PCB board views ([Top Layer](docs/hardware/PcbTop.png), [Inner 1](docs/hardware/PcbInner1.png), [Inner 2](docs/hardware/PcbInner2.png), [Bottom Layer](docs/hardware/PcbBottom.png) and [3D View](docs/hardware/jlcpcb_3d_1.png)).
 
