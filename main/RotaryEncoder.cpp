@@ -6,7 +6,7 @@
 
 #include "common.h"
 
-RotaryEncoder::RotaryEncoder(int pin_S1, int pin_S2, std::function<void(bool)> on_rotate)
+RotaryEncoder::RotaryEncoder(int pin_A, int pin_B, std::function<void(bool)> on_rotate)
 {
     m_callback = on_rotate;
 
@@ -25,12 +25,12 @@ RotaryEncoder::RotaryEncoder(int pin_S1, int pin_S2, std::function<void(bool)> o
     pcnt_glitch_filter_config_t pcnt_glitch_config = { .max_glitch_ns = 7500 };
     ESP_ERROR_CHECK(pcnt_unit_set_glitch_filter(m_unit, &pcnt_glitch_config));
 
-    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_S1)));
-    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_S2)));
+    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_B)));
+    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_B)));
 
     pcnt_chan_config_t pcnt_chan_config = {
-        .edge_gpio_num = pin_S1,
-        .level_gpio_num = pin_S2,
+        .edge_gpio_num = pin_A,
+        .level_gpio_num = pin_B,
     };
     ESP_ERROR_CHECK(pcnt_new_channel(m_unit, &pcnt_chan_config, &m_chan));
 

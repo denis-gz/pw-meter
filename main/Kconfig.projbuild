@@ -7,13 +7,13 @@ menu "Project Configuration"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
         default 0
 
-    config PIN_ENCODER_S1
-        int "Pin number of rotary encoder S1 output (counter)"
+    config PIN_ENCODER_A
+        int "Pin number of rotary encoder channel A output"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
         default 18
 
-    config PIN_ENCODER_S2
-        int "Pin number of rotary encoder S2 output (direction)"
+    config PIN_ENCODER_B
+        int "Pin number of rotary encoder channel B output"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
         default 17
 
@@ -36,10 +36,5 @@ menu "Project Configuration"
         int "Pin number of ADC_I channel input"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
         default 9
-
-    config I2C_SSD1306_ADDR
-		hex "Slave address of SSD1306 display device on I2C bus"
-        range ENV_I2C_ADDR_RANGE_MIN ENV_I2C_ADDR_RANGE_MAX
-        default ENV_I2C_ADDR_RANGE_MIN
 
 endmenu

@@ -6,7 +6,7 @@
 class RotaryEncoder
 {
 public:
-    RotaryEncoder(int pin_S1, int pin_S2, std::function<void(bool)> on_rotate);
+    RotaryEncoder(int pin_A, int pin_B, std::function<void(bool)> on_rotate);
     ~RotaryEncoder();
 
     void Start();

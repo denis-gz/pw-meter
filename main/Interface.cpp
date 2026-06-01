@@ -391,9 +391,9 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     }
 }
 
-void PowerMeterApp::process_encoder_input(const EncoderInputMessage& input)
+void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
 {
-    switch (input.action) {
+    switch (encoder.action) {
         case EncoderInputAction::Next:
             switch (ds.input_state) {
                 case PageSelection:

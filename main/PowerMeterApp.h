@@ -148,9 +148,9 @@ private:
     void set_wifi_pass(string_t value);
 
     void process_result(const ResultMessage& result);
-    void process_encoder_input(const EncoderInputMessage& result);
+    void process_encoder_input(const EncoderInputMessage& encoder);
     void process_console_input(const ConsoleInputMessage& result);
-    void process_log(const LogMessage& result);
+    void process_log(const LogMessage& log);
 
     void on_encoder_rotate(bool is_ccw);
     void on_encoder_click(bool is_long);
