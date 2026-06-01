@@ -179,6 +179,8 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         m.f_pf = 1.0f;
     if (m.f_pf < -1.0f)
         m.f_pf = -1.0f;
+    if (m.f_v < 5)
+        m.f_hz = NAN;
 
     ++ds.counter;
     if (ds.counter % 5 == 0)    // Roughly 1 sec
@@ -193,7 +195,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         ds.pause--;
     if (!ds.pause) {
         static constexpr const char* fmt = "\n"
-            "\tv_rms           = %.0fV\n"
+            "\tv_rms           = %.1fV\n"
             "\ti_rms           = %.2fA\n"
             "\tapparent_power  = %.1fVA\n"
             "\treal_power      = %.1fW\n"
@@ -215,7 +217,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         case MainsPage: {
             if (!ds.pause) {
                 ds.clear_lines(false);
-                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.0fV", m.f_v);
+                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.1fV", m.f_v);
                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "I_rms : %.2fA", m.f_i);
                 snprintf(ds.lines[2].data(), sizeof(display_line_t), "F_pwr : %.1fVA", m.f_va);
                 snprintf(ds.lines[3].data(), sizeof(display_line_t), "R_pwr : %.1fW", m.f_w);
@@ -224,7 +226,10 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                     snprintf(ds.lines[5].data(), sizeof(display_line_t), "PF    : (n/a)");
                 else
                     snprintf(ds.lines[5].data(), sizeof(display_line_t), "PF    : %.2f", m.f_pf);
-                snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.2fHz", m.f_hz);
+                if (std::isnan(m.f_hz))
+                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : (n/a)");
+                else
+                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.2fHz", m.f_hz);
                 ds.inverse[3] = ds.inverse[0] || ds.inverse[1];
                 ds.inverse[5] = ds.inverse[0] || ds.inverse[1];
             }
