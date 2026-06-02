@@ -161,17 +161,18 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     MqttMessage m {};
     m.f_v = ds.filter_v.process(result.v_rms, &ds.inverse[0]);
     m.f_i = (result.i_rms == 0.0f)
-        ? (ds.filter_i.reset(), 0.0f)
+        ? (ds.filter_i.reset(), ds.inverse[1] = false, 0.0f)
         : ds.filter_i.process(result.i_rms, &ds.inverse[1]);
     m.f_va = m.f_v * m.f_i;
     m.f_w = (result.real_power == 0.0f)
-        ? (ds.filter_w.reset(), 0.0f)
+        ? (ds.filter_w.reset(), ds.inverse[2] = false, 0.0f)
         : ds.filter_w.process(result.real_power, &ds.inverse[2]);
-    m.f_hz = ds.filter_hz.process(result.frequency, &ds.inverse[6]);
+    m.f_hz = (m.f_v < 10)
+        ? (ds.filter_hz.reset(), ds.inverse[6] = false, NAN)
+        : ds.filter_hz.process(result.frequency, &ds.inverse[6]);
     //float f_cos = filter_pf.process(result.cos_phi);
     //float f_sh = filter_sh.process(result.vi_shift);
     m.f_wh = result.energy;
-
     m.f_pf = NAN;
     if (m.f_va > 0.0f)
         m.f_pf = m.f_w / m.f_va;
@@ -179,8 +180,6 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         m.f_pf = 1.0f;
     if (m.f_pf < -1.0f)
         m.f_pf = -1.0f;
-    if (m.f_v < 5)
-        m.f_hz = NAN;
 
     ++ds.counter;
     if (ds.counter % 5 == 0)    // Roughly 1 sec

@@ -87,23 +87,36 @@ void PowerMeterApp::reader_task()
         // Block and wait for a chunk of data from DMA
         esp_err_t ret = adc_continuous_read_parse(m_adc, parsed_buf, SAMPLES_TO_READ, &samples_count, portMAX_DELAY);
         if (ret == ESP_OK) {
+            bool v_overflow_warning_printed = false;
+            bool i_overflow_warning_printed = false;
+
             // Parse the raw ESP32-S3 data into clean values
             for (int i = 0; i < samples_count; ++i) {
                 if (!parsed_buf[i].valid) {
                     m_v_ring_buffer.reset();
                     m_i_ring_buffer.reset();
-                    //m_error_count++;
+                    ESP_LOGW(TAG, "Bad ADC sample encountered! The frame is dropped and buffers are reset.");
                     break;
                 }
                 if (parsed_buf[i].channel == m_adc_v_channel_id) {
                     int calibrated_mv = 0;
                     adc_cali_raw_to_voltage(m_adc_v_cali, parsed_buf[i].raw_data, &calibrated_mv);
-                    m_v_ring_buffer.push(calibrated_mv);
+                    if (!m_v_ring_buffer.push(calibrated_mv)) {
+                        if (!v_overflow_warning_printed) {
+                            ESP_LOGW(TAG, "V-Buffer Overflow! Samples are being dropped.");
+                            v_overflow_warning_printed = true;
+                        }
+                    }
                 }
                 else if (parsed_buf[i].channel == m_adc_i_channel_id) {
                     int calibrated_mv = 0;
                     adc_cali_raw_to_voltage(m_adc_i_cali, parsed_buf[i].raw_data, &calibrated_mv);
-                    m_i_ring_buffer.push(calibrated_mv);
+                    if (!m_i_ring_buffer.push(calibrated_mv)) {
+                        if (!i_overflow_warning_printed) {
+                            ESP_LOGW(TAG, "I-Buffer Overflow! Samples are being dropped.");
+                            i_overflow_warning_printed = true;
+                        }
+                    }
                 }
             }
             if (m_compute_task)

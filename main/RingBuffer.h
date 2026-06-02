@@ -53,6 +53,15 @@ public:
         return true;
     }
 
+    bool pop_burst(T* dest, size_t count) {
+        if (available() < count)
+            return false;
+        for (size_t i = 0; i < count; i++) {
+            pop(dest[i]);
+        }
+        return true;
+    }
+
     // Check how many items are available to read
     size_t available() const {
         size_t current_head = head.load(std::memory_order_acquire);

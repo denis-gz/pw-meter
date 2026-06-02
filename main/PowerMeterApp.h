@@ -5,6 +5,7 @@
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <mqtt_client.h>
+#include <cmath>
 
 #include "common.h"
 #include "RotaryEncoder.h"
@@ -20,13 +21,13 @@
 #define SAMPLE_FREQ_HZ  8000
 #define CHANNEL_FREQ_HZ 4000.0
 
-// Number of bytes the DMA will push to our task at once.
-// 3200 bytes = 800 samples (400 voltage + 400 current) per frame.
-const size_t SAMPLES_TO_READ = 800;
-const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
-
 // We want to process exactly 10 AC cycles (at 50Hz and 4000 sampling rate)
 const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
+
+// Number of bytes the DMA will push to our task at once.
+// 6400 bytes = 1600 samples (800 voltage + 800 current) per frame (4 bytes)
+const size_t SAMPLES_TO_READ = CHUNK_SIZE * 2;
+const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
 
 // The coarse estimation of sampling shift introduced by the LM358 op-amp on V channel (samples)
 #define LM_COARS_SAMPLES_SHIFT  (4)
@@ -35,10 +36,15 @@ const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
 #define LM_FINE_SAMPLES_SHIFT   (4.35f)
 
 // Set noise floor level to avoid spurious readings
-const float I_NOISE_FLOOR = 0.12f; // 120 mA
+const float I_NOISE_FLOOR = 0.10f; // 100 mA
 
 const float V_COEF = 0.55f;
 const float I_COEF = 0.0262f;
+
+// Define the absolute maximum real-world voltage before considering it a glitch
+const float MAX_EXPECTED_V_RMS = 270.0f;
+// Calculate the corresponding raw ADC amplitude dynamically
+const float SPIKE_THRESHOLD_ADC = (MAX_EXPECTED_V_RMS * M_SQRT2) / V_COEF;
 
 constexpr bool kDisposing = true;
 
@@ -171,8 +177,8 @@ private:
     adc_cali_handle_t m_adc_i_cali {};
     adc_continuous_handle_t m_adc {};
 
-    LockFreeRingBuffer<float, 4096> m_v_ring_buffer;
-    LockFreeRingBuffer<float, 4096> m_i_ring_buffer;
+    LockFreeRingBuffer<float, CHUNK_SIZE * 4> m_v_ring_buffer;
+    LockFreeRingBuffer<float, CHUNK_SIZE * 4> m_i_ring_buffer;
 
     // Will compute the AC center value to rip off the DC bias (in a case estimated 1.65 mV bias will drift eventually)
     DCBlocker m_v_dc_blocker;
