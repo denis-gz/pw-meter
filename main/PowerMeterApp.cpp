@@ -1,11 +1,12 @@
 #include "PowerMeterApp.h"
 
+timeval PowerMeterApp::s_start_time {};
+
 PowerMeterApp::PowerMeterApp()
     : m_encoder(CONFIG_PIN_ENCODER_A, CONFIG_PIN_ENCODER_B, [this](bool is_ccw) { on_encoder_rotate(is_ccw); })
     , m_encoder_key(CONFIG_PIN_ENCODER_KEY, [this] (bool is_long) { on_encoder_click(is_long); })
+    , m_led(CONFIG_PIN_LED, true)
 {
-    ESP_LOGI(TAG, "Running on core #%d", xPortGetCoreID());
-
     setup_console_input();
     start_tasks();
 }
@@ -54,6 +55,15 @@ void PowerMeterApp::start_tasks()
         4096,                   // Stack size
         this,                   // Parameter passed to the task (pointer to object)
         20,                     // Task priority (0 is lowest, configMAX_PRIORITIES-1 is highest)
+        nullptr,                // No task handle needed
+        xPortGetCoreID()        // Pin to the same core
+    );
+    xTaskCreatePinnedToCore(
+        member_cast<TaskFunction_t>(&PowerMeterApp::indicator_task),
+        "indicator_task",       // A descriptive name for debugging
+        2048,                   // Stack size
+        this,                   // Parameter passed to the task (pointer to object)
+        1,                      // Task priority (0 is lowest, configMAX_PRIORITIES-1 is highest)
         nullptr,                // No task handle needed
         xPortGetCoreID()        // Pin to the same core
     );

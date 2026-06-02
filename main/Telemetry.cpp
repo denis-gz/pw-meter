@@ -2,6 +2,7 @@
 
 #include <nvs_flash.h>
 #include <esp_netif_sntp.h>
+#include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <mqtt_client.h>
 
@@ -29,6 +30,7 @@ void PowerMeterApp::telemetry_task()
 void PowerMeterApp::setup_telemetry(bool disposing)
 {
     if (disposing) {
+        sntp_set_time_sync_notification_cb(nullptr);
         setup_wifi(disposing);
         setup_nvs(disposing);
         vQueueDelete(m_telemetry_queue), m_telemetry_queue = nullptr;
@@ -121,8 +123,10 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
 
                 ESP_LOGI(TAG, "Starting Wi-Fi...");
                 ESP_ERROR_CHECK(esp_wifi_start());
+                set_indicator(LED_STATE_WIFI_SEARCHING);
 
                 esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+                config.sync_cb = &on_time_sync;
                 esp_netif_sntp_init(&config);
                 break;
             }
@@ -160,8 +164,9 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
                 break;
             }
             case WIFI_EVENT_STA_DISCONNECTED: {
-                xEventGroupClearBits(m_wifi_event_group, WIFI_CONNECTED_BIT | MQTT_CONNECTED_BIT);
+                xEventGroupClearBits(m_wifi_event_group, WIFI_CONNECTED_BIT);
                 esp_wifi_connect();
+                set_indicator(LED_STATE_WIFI_SEARCHING);
                 post_log({ "Wi-Fi connecting" });
                 break;
             }
@@ -171,6 +176,7 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(m_wifi_event_group, WIFI_CONNECTED_BIT);
+        set_indicator(LED_STATE_CONNECTED);
         post_log({ "Network ready" });
 
         auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
@@ -198,11 +204,9 @@ void PowerMeterApp::on_mqtt_event(esp_event_base_t event_base, int32_t event_id,
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             //esp_mqtt_client_subscribe(m_mqtt_handle, MQTT_SUB_TOPIC, 0);
-            xEventGroupSetBits(m_wifi_event_group, MQTT_CONNECTED_BIT);
             post_log({ "MQTT ready" });
             break;
         case MQTT_EVENT_DISCONNECTED:
-            xEventGroupClearBits(m_wifi_event_group, MQTT_CONNECTED_BIT);
             post_log({ "MQTT disconnect" });
             break;
         case MQTT_EVENT_DATA:
@@ -215,35 +219,43 @@ void PowerMeterApp::on_mqtt_event(esp_event_base_t event_base, int32_t event_id,
 
 void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
 {
-    auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT | MQTT_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
+    auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
     if (uxBits & WIFI_CONNECTED_BIT) {
-        if (uxBits & MQTT_CONNECTED_BIT) {
+        int ret;
+        do {
             string_t buf;
             size_t len;
 
             len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_v);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/voltage", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/voltage", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_i);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/current", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/current", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_va);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/full_power", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/full_power", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_w);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/real_power", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/real_power", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_wh);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/energy", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/energy", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_pf);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/power_factor", buf.data(), len, 0, 0);
-
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/power_factor", buf.data(), len, 0, 0), ret < 0)
+                break;
             len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_hz);
-            esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/frequency", buf.data(), len, 0, 0);
+            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/frequency", buf.data(), len, 0, 0), ret < 0)
+                break;
+        }
+        while (0);
+
+        if (ret < 0) {
+            set_indicator(LED_STATE_MQTT_ERROR);
+            post_log({ "MQTT error" });
         }
         else {
-            post_log({ "MQTT not ready" });
+            set_indicator(LED_STATE_MQTT_TX);
         }
     }
     else if (m_netif) {
@@ -259,4 +271,16 @@ void PowerMeterApp::set_wifi_ssid(string_t value)
 void PowerMeterApp::set_wifi_pass(string_t value)
 {
     esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_SET_PASS, &value, sizeof(value), pdMS_TO_TICKS(10));
+}
+
+void PowerMeterApp::on_time_sync(timeval* tv)
+{
+    if (!s_start_time.tv_sec) {
+        s_start_time = *tv;
+        if (tm* local = std::localtime(&tv->tv_sec)) {
+            char buf[64];
+            strftime(buf, sizeof(buf), "%c", local);
+            ESP_LOGI(TAG, "Time is %s", buf);
+        }
+    }
 }

@@ -10,6 +10,8 @@
 #include "common.h"
 #include "RotaryEncoder.h"
 #include "Button.h"
+#include "LED.h"
+#include "Indicator.h"
 
 #include "Reader.h"
 #include "Compute.h"
@@ -130,6 +132,8 @@ private:
         };
     };
 
+    static void on_time_sync(timeval* tv);
+
     void setup_reader(bool disposing = false);
     void setup_interface(bool disposing = false);
     void start_tasks();
@@ -138,12 +142,13 @@ private:
     void setup_telemetry(bool disposing = false);
     void setup_nvs(bool disposing = false);
     void setup_wifi(bool disposing = false);
+    void setup_indicator(bool disposing = false);
 
     void interface_task();
     void compute_task();
     void reader_task();
     void telemetry_task();
-    void console_input_task();
+    void indicator_task();
 
     void mqtt_start();
     void mqtt_stop();
@@ -155,7 +160,7 @@ private:
 
     void process_result(const ResultMessage& result);
     void process_encoder_input(const EncoderInputMessage& encoder);
-    void process_console_input(const ConsoleInputMessage& result);
+    void process_console_input(const ConsoleInputMessage& input);
     void process_log(const LogMessage& log);
 
     void on_encoder_rotate(bool is_ccw);
@@ -169,8 +174,11 @@ private:
     bool input_value(string_t& value);
 
     void post_log(display_line_t message);
+    void set_indicator(led_mode_t mode);
 
 private:
+    static timeval s_start_time;
+
     adc_channel_t m_adc_v_channel_id {};
     adc_channel_t m_adc_i_channel_id {};
     adc_cali_handle_t m_adc_v_cali {};
@@ -188,6 +196,7 @@ private:
     RotaryEncoder m_encoder;
     Button m_encoder_key;
     CPULoadMeter m_cpu_meter;
+    LED m_led;
 
     esp_netif_t* m_netif = nullptr;
     EventGroupHandle_t m_wifi_event_group {};
@@ -214,6 +223,7 @@ private:
 
     QueueHandle_t m_interface_queue {};
     QueueHandle_t m_telemetry_queue {};
+    QueueHandle_t m_indicator_queue {};
 
     esp_event_loop_handle_t m_console_event_loop {};
 };

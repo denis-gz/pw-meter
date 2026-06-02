@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>
 
 enum ScreenPage: uint8_t {
+    SplashScreen,
     MainsPage,
     DevicePage,
     NetworkPage,
@@ -97,6 +98,7 @@ void PowerMeterApp::setup_interface(bool disposing)
         m_interface_queue = xQueueCreate(10, sizeof(InterfaceTaskMessage));
 
         i2c_master_init(&m_oled, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
+        m_led.init();
 
         int retries = 5;
         esp_err_t res;
@@ -111,11 +113,11 @@ void PowerMeterApp::setup_interface(bool disposing)
 
         if (res == ESP_OK) {
             ssd1306_clear_screen(&m_oled, false);
-            ssd1306_contrast(&m_oled, 0xFF);
+            ssd1306_contrast(&m_oled, 0x7F);
             ssd1306_bitmaps(&m_oled, 0, 0, SPLASH_SCREEN, 128, 64, false);
 
             // Delay before displaying results to let splash screen linger for some time
-            ds.pause = 7;
+            ds.pause = 8;   // 8 * 0.2 = 1.6 sec
             ds.with_display = true;
         }
         else {
@@ -213,6 +215,11 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     }
 
     switch (ds.page) {
+        case SplashScreen:
+            if (ds.pause)
+                return;
+            ds.page = MainsPage;
+            break;
         case MainsPage: {
             if (!ds.pause) {
                 ds.clear_lines(false);
@@ -242,13 +249,18 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                     strftime(ds.lines[0].data(), sizeof(display_line_t), "%H:%M:%S", local);
                     strftime(ds.lines[1].data(), sizeof(display_line_t), "%a %d.%m.%Y", local);
                 }
-                uint32_t secs = pdTICKS_TO_MS(xTaskGetTickCount()) / 1000;
+                uint32_t secs = (utc_now - s_start_time.tv_sec);
+                uint16_t days = secs / 86400;
                 uint16_t hours = secs / 3600;
                 uint16_t minutes = (secs % 3600) / 60;
-                uint16_t seconds = secs % 60;
                 size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
                 size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-                snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : %03hu:%02hu:%02hu", hours, minutes, seconds);
+                if (days < 1000) {
+                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : %03hu.%02hu:%02hu", days, hours, minutes);
+                }
+                else {
+                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : ---.--:--");
+                }
                 snprintf(ds.lines[4].data(), sizeof(display_line_t), "Cpu0 : %4.1f%%", ds.cpu0);
                 snprintf(ds.lines[5].data(), sizeof(display_line_t), "Cpu1 : %4.1f%%", ds.cpu1);
                 snprintf(ds.lines[6].data(), sizeof(display_line_t), "Heap : %4uK", free_heap / 1024);
@@ -265,7 +277,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                 esp_netif_get_ip_info(m_netif, &ip_info);
 
                 snprintf(ds.lines[0].data(), sizeof(display_line_t), "---- Wi-Fi -----");
-                snprintf(ds.lines[1].data(), sizeof(display_line_t), "SSID:%s", wifi.sta.ssid);
+                snprintf(ds.lines[1].data(), sizeof(display_line_t), "SSID:%.11s", wifi.sta.ssid);
                 snprintf(ds.lines[2].data(), sizeof(display_line_t), "Channel:%d", wifi.sta.channel);
 
                 uint8_t a, b, c, d;
@@ -310,7 +322,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 wifi_config_t wifi {};
                                 esp_wifi_get_config(WIFI_IF_STA, &wifi);
                                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", wifi.sta.ssid);
+                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", wifi.sta.ssid);
                                 break;
                             }
                             case ItemWifiPassword: {
@@ -319,7 +331,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 string_t pass {};
                                 std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) wifi.sta.password)), '*');
                                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "2. Wi-Fi passw:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", pass.data());
+                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", pass.data());
                                 break;
                             }
                             case ItemINoiseFloor: {
@@ -366,8 +378,8 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                 auto app = esp_app_get_description();
                 snprintf(ds.lines[0].data(), sizeof(display_line_t), "---- About -----");
                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "Power Meter");
-                snprintf(ds.lines[3].data(), sizeof(display_line_t), "Ver: %s", app->version);
-                snprintf(ds.lines[4].data(), sizeof(display_line_t), "IDF: %s", app->idf_ver);
+                snprintf(ds.lines[3].data(), sizeof(display_line_t), "Ver: %.11s", app->version);
+                snprintf(ds.lines[4].data(), sizeof(display_line_t), "IDF: %.11s", app->idf_ver);
                 snprintf(ds.lines[6].data(), sizeof(display_line_t), "(c) 2026");
                 snprintf(ds.lines[7].data(), sizeof(display_line_t), "Denys Zavorotnyi");
             }
