@@ -58,11 +58,12 @@ struct DisplayContext
 
     // Display matrix is 16x8 chars
     display_line_t lines[8] {};
+    // Inversion flags for each line
     int inverse[8] {};
 
-    void clear_lines(bool with_inverse = true) {
+    void clear_lines(bool clear_inverse = true) {
         memset(lines, 0x20, sizeof(lines));
-        if (with_inverse)
+        if (clear_inverse)
             memset(inverse, 0, sizeof(inverse));
     }
 
@@ -71,6 +72,30 @@ struct DisplayContext
     ScreenPage page {};
     InputState input_state {};
     MenuItem item_selected {};
+
+    void set_next_page() {
+        page = (ScreenPage) ((page + 1) % PageCount);
+        if (page == SplashScreen)
+            page = (ScreenPage) (SplashScreen + 1);
+    }
+
+    void set_prev_page() {
+        page = (ScreenPage) ((page + PageCount - 1) % PageCount);
+        if (page == SplashScreen)
+            page = (ScreenPage) (PageCount - 1);
+    }
+
+    void set_next_item() {
+        item_selected = (MenuItem) ((item_selected + 1) % ItemCount);
+        if (item_selected == ItemNone)
+            item_selected = ItemDefault;
+    }
+
+    void set_prev_item() {
+        item_selected = (MenuItem) ((item_selected + ItemCount - 1) % ItemCount);
+        if (item_selected == ItemNone)
+            item_selected = (MenuItem) (ItemCount - 1);
+    }
 };
 
 static DisplayContext ds;
@@ -414,13 +439,11 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
             switch (ds.input_state) {
                 case PageSelection:
                     ds.pause = 0;
-                    ds.page = (ScreenPage) ((ds.page + 1) % PageCount);
+                    ds.set_next_page();
                     ds.clear_lines();
                     break;
                 case MenuSelection:
-                    ds.item_selected = (MenuItem) ((ds.item_selected + 1) % ItemCount);
-                    if (ds.item_selected == ItemNone)
-                        ds.item_selected = ItemDefault;
+                    ds.set_next_item();
                     break;
                 default:
                     break;
@@ -430,13 +453,11 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
             switch (ds.input_state) {
                 case PageSelection:
                     ds.pause = 0;
-                    ds.page = (ScreenPage) ((ds.page + PageCount - 1) % PageCount);
+                    ds.set_prev_page();
                     ds.clear_lines();
                     break;
                 case MenuSelection:
-                    ds.item_selected = (MenuItem) ((ds.item_selected + ItemCount - 1) % ItemCount);
-                    if (ds.item_selected == ItemNone)
-                        ds.item_selected = (MenuItem) (ItemCount - 1);
+                    ds.set_prev_item();
                     break;
                 default:
                     break;

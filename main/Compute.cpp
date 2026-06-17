@@ -15,7 +15,7 @@ void PowerMeterApp::compute_task()
     auto aligned_v_array = new float[CHUNK_SIZE];
 
     // This is used to save the last 4 samples of the previous chunk since the current
-    // goes ahead of voltage due to LM358 singal processing delay
+    // goes ahead of voltage due to LM358 signal processing delay
     float prev_v_history[LM_COARS_SAMPLES_SHIFT] {};
 
     while (!m_stop_tasks) {
@@ -52,6 +52,7 @@ void PowerMeterApp::compute_task()
             }
 
             // --- THE RF CHUNK REJECTION ---
+
             bool rf_spike_detected = false;
 
             for (int i = 0; i < CHUNK_SIZE; i++) {
@@ -77,12 +78,13 @@ void PowerMeterApp::compute_task()
 
             // Get first 4 samples from the previous chunk
             memcpy(&aligned_v_array[0], &prev_v_history[0], LM_COARS_SAMPLES_SHIFT * sizeof(float));
-            // Fill the rest 796 samples from the voltage chunk
+            // Fill the rest samples from the new chunk
             memcpy(&aligned_v_array[LM_COARS_SAMPLES_SHIFT], &v_array[0], (CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT) * sizeof(float));
-            // Save the last 4 samples of the voltage chunk for the next reading
+            // Save the last 4 samples of the new chunk for the next reading
             memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT], LM_COARS_SAMPLES_SHIFT * sizeof(float));
 
-            // Calculate the grid frequency
+            // --- CALCULATE THE GRID FREQUENCY ---
+
             float v_first_crossing_index = NAN;
             float v_last_crossing_index = NAN;
             int v_cycle_count = 0;
@@ -101,7 +103,7 @@ void PowerMeterApp::compute_task()
                 if (!is_positive_half && aligned_v_array[i] > HYSTERESIS_THRESHOLD) {
                     is_positive_half = true;
 
-                    // ADD THIS: The 50-sample Deadtime Lockout
+                    // The 50-sample deadtime Lockout
                     if (i - last_rising_edge_index > 50) {
                         last_rising_edge_index = i;
 
@@ -144,14 +146,14 @@ void PowerMeterApp::compute_task()
                     ESP_LOGE(TAG, "ANOMALY DETECTED! Frequency calculated as: %f Hz", m_frequency);
                     ESP_LOGE(TAG, "Cycle Count: %d, First Crossing: %f, Last Crossing: %f", v_cycle_count, v_first_crossing_index, v_last_crossing_index);
 
-                    // Dump the array in a format easy to copy/paste
-                    //printf("--- START CHUNK DUMP (800 samples) ---\n");
+                    //printf("--- START CHUNK DUMP ---\n");
                     //for (int i = 0; i < CHUNK_SIZE; i++) {
                     //    printf("%f\n", aligned_v_array[i]);
                     //}
                     //printf("--- END CHUNK DUMP ---\n");
                 }
             }
+            // ------------------------------------
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
             float v_sq_sum = 0;
