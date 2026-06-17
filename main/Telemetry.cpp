@@ -226,7 +226,7 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
             string_t buf;
             size_t len;
 
-            len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_v);
+            len = snprintf(buf.data(), sizeof(buf), "%.0f", msg.f_v);
             if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/voltage", buf.data(), len, 0, 0), ret < 0)
                 break;
             len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_i);

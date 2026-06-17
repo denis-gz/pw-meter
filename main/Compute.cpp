@@ -29,20 +29,32 @@ void PowerMeterApp::compute_task()
 
             // Sacrifice the first chunk to perform initial DC bias learning
             if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
+                float v_max = v_array[0];
+                float v_min = v_array[0];
+                float i_max = i_array[0];
+                float i_min = i_array[0];
                 double v_sum = 0;
                 double i_sum = 0;
                 for (int i = 0; i < CHUNK_SIZE; i++) {
                     v_sum += v_array[i];
                     i_sum += i_array[i];
+                    if (v_max < v_array[i])
+                        v_max = v_array[i];
+                    if (v_min > v_array[i])
+                        v_min = v_array[i];
+                    if (i_max < i_array[i])
+                        i_max = i_array[i];
+                    if (i_min > i_array[i])
+                        i_min = i_array[i];
                 }
                 float v_mean = v_sum / CHUNK_SIZE;
                 float i_mean = i_sum / CHUNK_SIZE;
 
                 m_v_dc_blocker.set_current_dc_bias(v_mean);
-                ESP_LOGI(TAG, "ADC_V: DC bias %0.1f", v_mean);
+                ESP_LOGI(TAG, "ADC_V: DC bias %0.1f, max %0.1f, min %0.1f", v_mean, v_max, v_min);
 
                 m_i_dc_blocker.set_current_dc_bias(i_mean);
-                ESP_LOGI(TAG, "ADC_I: DC bias %0.1f", i_mean);
+                ESP_LOGI(TAG, "ADC_I: DC bias %0.1f, max %0.1f, min %0.1f", i_mean, i_max, i_min);
 
                 // Save 4 last centered bytes for the next chunk
                 for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
@@ -139,7 +151,7 @@ void PowerMeterApp::compute_task()
                 const float delta_index = v_last_crossing_index - v_first_crossing_index;
 
                 // Frequency = (Cycles / Samples) * Sampling_Rate
-                m_frequency = (total_full_cycles_measured / delta_index) * CHANNEL_FREQ_HZ;
+                m_frequency = (total_full_cycles_measured / delta_index) * CALIBRATED_FREQ_HZ;
 
                 // If the calculated frequency jumps above 52 Hz, dump the chunk to the console!
                 if (m_frequency > 52.0f) {
@@ -181,7 +193,7 @@ void PowerMeterApp::compute_task()
                 m_real_power = real_pwr;
 
                 // 800 samples at 4000Hz is exactly 0.2 seconds (0.00005556 hours)
-                const double CHUNK_TIME = (static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ);
+                const double CHUNK_TIME = (static_cast<double>(CHUNK_SIZE) / CALIBRATED_FREQ_HZ);
                 m_acc_energy_ws += m_real_power * CHUNK_TIME;
             }
 

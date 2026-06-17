@@ -20,8 +20,9 @@
 #include "Telemetry.h"
 
 // 4000 Hz per channel * 2 channels = 8000 Hz total sampling frequency
-#define SAMPLE_FREQ_HZ  8000
-#define CHANNEL_FREQ_HZ 4000.0
+#define SAMPLE_FREQ_HZ     8000
+#define CHANNEL_FREQ_HZ    4000.0
+#define CALIBRATED_FREQ_HZ 4006.0
 
 // We want to process exactly 10 AC cycles (at 50Hz and 4000 sampling rate)
 const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
@@ -40,7 +41,7 @@ const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV
 // Set noise floor level to avoid spurious readings
 const float I_NOISE_FLOOR = 0.10f; // 100 mA
 
-const float V_COEF = 0.55f;
+const float V_COEF = 0.485f;
 const float I_COEF = 0.0262f;
 
 // Define the absolute maximum real-world voltage before considering it a glitch

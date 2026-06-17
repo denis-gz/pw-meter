@@ -248,7 +248,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         case MainsPage: {
             if (!ds.pause) {
                 ds.clear_lines(false);
-                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.1fV", m.f_v);
+                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.0fV", m.f_v);
                 snprintf(ds.lines[1].data(), sizeof(display_line_t), "I_rms : %.2fA", m.f_i);
                 snprintf(ds.lines[2].data(), sizeof(display_line_t), "F_pwr : %.1fVA", m.f_va);
                 snprintf(ds.lines[3].data(), sizeof(display_line_t), "R_pwr : %.1fW", m.f_w);

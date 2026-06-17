@@ -9511,15 +9511,6 @@
 				(hide yes)
 			)
 		)
-		(property "LTSC" ""
-			(at 139.7 116.84 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(pin "1"
 			(uuid "3183f6dd-4035-48ad-970b-a14a5bcfd82f")
 		)
@@ -9727,8 +9718,8 @@
 				)
 			)
 		)
-		(property "Value" "LC_Tech_ZMPT101B_LM358_Sensor"
-			(at 39.116 22.352 0)
+		(property "Value" "LC_Tech_HW697_Sensor"
+			(at 33.782 22.352 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12160,7 +12151,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10k"
+		(property "Value" "4.7k"
 			(at 49.53 35.5599 0)
 			(effects
 				(font
@@ -12196,16 +12187,7 @@
 				(hide yes)
 			)
 		)
-		(property "LCSC" "C17414"
-			(at 46.99 34.29 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "LTSC" ""
+		(property "LCSC" "C17673"
 			(at 46.99 34.29 0)
 			(effects
 				(font
@@ -18296,15 +18278,6 @@
 			)
 		)
 		(property "LCSC" "C17673"
-			(at 149.86 116.84 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "LTSC" ""
 			(at 149.86 116.84 0)
 			(effects
 				(font

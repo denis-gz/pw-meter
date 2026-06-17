@@ -14,7 +14,8 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
-  nopnop2002/ssd1306:
+  denis-gz/ssd1306:
     path: components/ssd1306/
-    git: https://github.com/nopnop2002/esp-idf-ssd1306.git
+    git: https://github.com/denis-gz/esp-idf-ssd1306.git
+    version: "flip-fix"
   espressif/esp-dsp: '*'
