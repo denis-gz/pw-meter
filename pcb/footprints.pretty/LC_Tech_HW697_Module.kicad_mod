@@ -1,4 +1,4 @@
-(footprint "LC_Tech_ZMPT101B_LM358_Sensor"
+(footprint "LC_Tech_HW697_Module"
 	(version 20241229)
 	(generator "pcbnew")
 	(generator_version "9.0")
@@ -15,7 +15,7 @@
 			)
 		)
 	)
-	(property "Value" "LC_Tech_ZMPT101B_LM358_Sensor"
+	(property "Value" "LC_Tech_HW697_Module"
 		(at 25.2 21.4 0)
 		(unlocked yes)
 		(layer "F.Fab")
@@ -133,7 +133,7 @@
 		)
 	)
 	(pad "3" thru_hole rect
-		(at 48.5 6.2 270)
+		(at 48.5 5.15 270)
 		(size 1.508 1.508)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
@@ -142,7 +142,7 @@
 		(uuid "c8a6e7ed-6ecb-4c5c-ade1-089f4d8a7ee7")
 	)
 	(pad "4" thru_hole circle
-		(at 48.5 8.74 270)
+		(at 48.5 7.69 270)
 		(size 1.508 1.508)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
@@ -151,7 +151,7 @@
 		(uuid "a0d0e4a1-eef2-4e23-a28c-1b6630e9cd10")
 	)
 	(pad "5" thru_hole circle
-		(at 48.5 11.28 270)
+		(at 48.5 10.23 270)
 		(size 1.508 1.508)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
@@ -160,7 +160,7 @@
 		(uuid "f96c057e-d2ac-4f1a-b818-47bbad5b79b0")
 	)
 	(pad "6" thru_hole circle
-		(at 48.5 13.82 270)
+		(at 48.5 12.77 270)
 		(size 1.508 1.508)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
