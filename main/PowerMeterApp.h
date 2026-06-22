@@ -12,6 +12,7 @@
 #include "Button.h"
 #include "LED.h"
 #include "Indicator.h"
+#include "SettingsManager.h"
 
 #include "Reader.h"
 #include "Compute.h"
@@ -38,16 +39,8 @@ const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV
 // Actual sub-fraction sampling shift (measured samples)
 #define LM_FINE_SAMPLES_SHIFT   (4.35f)
 
-// Set noise floor level to avoid spurious readings
-const float I_NOISE_FLOOR = 0.10f; // 100 mA
-
-const float V_COEF = 0.485f;
-const float I_COEF = 0.0262f;
-
 // Define the absolute maximum real-world voltage before considering it a glitch
 const float MAX_EXPECTED_V_RMS = 270.0f;
-// Calculate the corresponding raw ADC amplitude dynamically
-const float SPIKE_THRESHOLD_ADC = (MAX_EXPECTED_V_RMS * M_SQRT2) / V_COEF;
 
 constexpr bool kDisposing = true;
 
@@ -141,7 +134,6 @@ private:
     void stop_tasks();
 
     void setup_telemetry(bool disposing = false);
-    void setup_nvs(bool disposing = false);
     void setup_wifi(bool disposing = false);
     void setup_indicator(bool disposing = false);
 
@@ -203,6 +195,8 @@ private:
     EventGroupHandle_t m_wifi_event_group {};
     esp_mqtt_client_handle_t m_mqtt {};
 
+    DeviceSettings m_settings;
+
     float m_v_rms = 0;
     float m_i_rms = 0;
     float m_apparent_power = 0;
@@ -211,7 +205,6 @@ private:
     float m_frequency = 0;
     //float m_vi_sample_shift = 0;
     double m_acc_energy_ws = 0;
-    float m_i_noise_floor = I_NOISE_FLOOR;
 
     // ***** DEBUG *****
     //volatile uint32_t m_error_count = 0;

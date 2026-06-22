@@ -67,6 +67,9 @@ void PowerMeterApp::compute_task()
 
             bool rf_spike_detected = false;
 
+            // Calculate the corresponding raw ADC amplitude
+            const float SPIKE_THRESHOLD_ADC = (MAX_EXPECTED_V_RMS * M_SQRT2) / m_settings.v_coef;
+
             for (int i = 0; i < CHUNK_SIZE; i++) {
                 // Strip the DC bias
                 v_array[i] = m_v_dc_blocker.process(v_array[i]);
@@ -174,22 +177,22 @@ void PowerMeterApp::compute_task()
             dsps_dotprod_f32(aligned_v_array, aligned_v_array, &v_sq_sum, CHUNK_SIZE);
             dsps_dotprod_f32(i_array, i_array, &i_sq_sum, CHUNK_SIZE);
 
-            m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * V_COEF;
-            m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * I_COEF;
+            m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * m_settings.v_coef;
+            m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * m_settings.i_coef;
 
-            if (m_i_rms < m_i_noise_floor) {
+            if (m_i_rms < m_settings.i_noise_floor) {
                 m_i_rms = 0.0f;
                 m_apparent_power = 0.0f;
                 m_real_power = 0.0f;
                 //m_cos_phi = NAN;
             }
             else {
-                m_apparent_power = m_v_rms * m_i_rms;       // VA
+                m_apparent_power = m_v_rms * m_i_rms;               // VA
 
                 float real_pwr = 0;
                 dsps_dotprod_f32(aligned_v_array, i_array, &real_pwr, CHUNK_SIZE);
                 real_pwr /= CHUNK_SIZE;
-                real_pwr *= V_COEF * I_COEF;                // Watts
+                real_pwr *= m_settings.v_coef * m_settings.i_coef;  // Watts
                 m_real_power = real_pwr;
 
                 // 800 samples at 4000Hz is exactly 0.2 seconds (0.00005556 hours)

@@ -6,7 +6,6 @@
 #include <esp_wifi.h>
 #include <mqtt_client.h>
 
-#include "wifi_creds.h"
 #include "mqtt_creds.h"
 
 void PowerMeterApp::telemetry_task()
@@ -32,28 +31,12 @@ void PowerMeterApp::setup_telemetry(bool disposing)
     if (disposing) {
         sntp_set_time_sync_notification_cb(nullptr);
         setup_wifi(disposing);
-        setup_nvs(disposing);
         vQueueDelete(m_telemetry_queue), m_telemetry_queue = nullptr;
     }
     else {
         ESP_LOGI(TAG, "telemetry setup");
         m_telemetry_queue = xQueueCreate(10, sizeof(MqttMessage));
-        setup_nvs(disposing);
         setup_wifi(disposing);
-    }
-}
-
-void PowerMeterApp::setup_nvs(bool disposing)
-{
-    if (!disposing) {
-        esp_err_t ret = nvs_flash_init();
-        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            ESP_ERROR_CHECK(nvs_flash_erase());
-            ESP_ERROR_CHECK(nvs_flash_init());
-        }
-        else {
-            ESP_ERROR_CHECK(ret);
-        }
     }
 }
 
@@ -112,14 +95,11 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
                 wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
                 ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_cfg));
 
-                wifi_config_t wifi_config = {
-                    .sta = {
-                        .ssid = WIFI_SSID,
-                        .password = WIFI_PASS,
-                    },
-                };
+                wifi_config_t wifi {};
+                memcpy(wifi.sta.ssid, m_settings.wifi_ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(m_settings.wifi_ssid.data())));
+                memcpy(wifi.sta.password, m_settings.wifi_pass.data(), std::min(sizeof(wifi.sta.password), strlen(m_settings.wifi_pass.data())));
                 ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-                ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+                ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi));
 
                 ESP_LOGI(TAG, "Starting Wi-Fi...");
                 ESP_ERROR_CHECK(esp_wifi_start());
@@ -132,11 +112,10 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
             }
             case WIFI_EVENT_USER_SET_SSID: {
                 string_t ssid = *(string_t*) event_data;
-                ESP_LOGI(TAG, "Setting new Wi-Fi SSID: %s", ssid.data());
+                ESP_LOGI(TAG, "Setting new Wi-Fi network name: %s", ssid.data());
 
                 wifi_config_t wifi {};
                 esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                memset(wifi.sta.ssid, 0, sizeof(wifi.sta.ssid));
                 memcpy(wifi.sta.ssid, ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(ssid.data())));
 
                 esp_wifi_stop();
@@ -146,12 +125,10 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
             }
             case WIFI_EVENT_USER_SET_PASS: {
                 string_t pass = *(string_t*) event_data;
-                ESP_LOGI(TAG, "Setting new Wi-Fi SSID: %s", pass.data());
+                ESP_LOGI(TAG, "Setting new Wi-Fi password: %s", pass.data());
 
                 wifi_config_t wifi {};
                 esp_wifi_get_config(WIFI_IF_STA, &wifi);
-
-                memset(wifi.sta.password, 0, sizeof(wifi.sta.password));
                 memcpy(wifi.sta.password, pass.data(), std::min(sizeof(wifi.sta.password), strlen(pass.data())));
 
                 esp_wifi_stop();
@@ -265,11 +242,13 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
 
 void PowerMeterApp::set_wifi_ssid(string_t value)
 {
+    SettingsManager::save(KEY_WIFI_SSID, value.data());
     esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_SET_SSID, &value, sizeof(value), pdMS_TO_TICKS(10));
 }
 
 void PowerMeterApp::set_wifi_pass(string_t value)
 {
+    SettingsManager::save(KEY_WIFI_PASS, value.data());
     esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_SET_PASS, &value, sizeof(value), pdMS_TO_TICKS(10));
 }
 

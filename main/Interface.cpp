@@ -410,17 +410,17 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 }
                                 case ItemINoiseFloor: {
                                     snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. I noise flr:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_i_noise_floor);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.i_noise_floor);
                                     break;
                                 }
                                 case ItemICalib: {
                                     snprintf(ds.lines[1].data(), sizeof(display_line_t), "4. I calibr:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", I_COEF);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.i_coef);
                                     break;
                                 }
                                 case ItemVCalib: {
                                     snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. V calibr:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", V_COEF);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.v_coef);
                                     break;
                                 }
                                 default:
@@ -675,19 +675,16 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
             case ConsoleInputAction::Float:
                 switch (ds.item_selected) {
                     case ItemINoiseFloor:
-                        if (input.float_value > 0) {
-                            ESP_LOGI(TAG, "Setting new I noise floor: %f", input.float_value);
-                            m_i_noise_floor = input.float_value;
-                        }
-                        else {
-                            ESP_LOGE(TAG, "Setting new I noise floor: out of range (%f)", input.float_value);
-                        }
+                        ESP_LOGI(TAG, "Setting new I noise floor: %f", input.float_value);
+                        SettingsManager::save(KEY_I_NOISE_FLOOR, m_settings.i_noise_floor = input.float_value);
                         break;
                     case ItemICalib:
-                        ESP_LOGW(TAG, "Setting new I calibration: not implemented");
+                        ESP_LOGW(TAG, "Setting new I calibration: %f", input.float_value);
+                        SettingsManager::save(KEY_I_COEF, m_settings.i_coef = input.float_value);
                         break;
                     case ItemVCalib:
-                        ESP_LOGW(TAG, "Setting new V calibration: not implemented");
+                        ESP_LOGW(TAG, "Setting new V calibration: %f", input.float_value);
+                        SettingsManager::save(KEY_V_COEF, m_settings.v_coef = input.float_value);
                         break;
                     default:
                         break;

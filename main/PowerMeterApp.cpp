@@ -7,6 +7,9 @@ PowerMeterApp::PowerMeterApp()
     , m_encoder_key(CONFIG_PIN_ENCODER_KEY, [this] (bool is_long) { on_encoder_click(is_long); })
     , m_led(CONFIG_PIN_LED, true)
 {
+    SettingsManager::setup();
+    SettingsManager::load(m_settings);
+
     setup_console_input();
     start_tasks();
 }
@@ -15,6 +18,8 @@ PowerMeterApp::~PowerMeterApp()
 {
     stop_tasks();
     setup_console_input(kDisposing);
+
+    SettingsManager::setup(kDisposing);
 
     vTaskDelay(pdMS_TO_TICKS(500));
     ESP_LOGI(TAG, "App destroyed");
