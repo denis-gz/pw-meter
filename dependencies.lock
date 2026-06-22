@@ -1,12 +1,12 @@
 dependencies:
   denis-gz/ssd1306:
-    component_hash: 67d52286c35b6d796752cd13c4f3dc1ab56803cac42e5580cde85311f3aa7a61
+    component_hash: fb7d6128d1ab277558c8eb90c1ba235e8f7152eb49151415c4413774cad63996
     dependencies: []
     source:
       git: https://github.com/denis-gz/esp-idf-ssd1306.git
       path: components/ssd1306/
       type: git
-    version: 15ee4d4770729148d1889fb3e9f68b51fbbfe05b
+    version: ae5c2cdcae26e0e87248b1734bd52c46dc7bd3df
   espressif/esp-dsp:
     component_hash: ed9ac175b14e0414399a2b33c525579414b5bad19a2a67b12ea212def96f9a98
     dependencies:
@@ -25,6 +25,6 @@ direct_dependencies:
 - denis-gz/ssd1306
 - espressif/esp-dsp
 - idf
-manifest_hash: 75e9441d0b0a27515ed9f064f26525ff1410f10197de543cc5bb4b868ff94b72
+manifest_hash: d0461cca6938f6741e33b0b0121839e85fb8dab5d5db7b70bc885c27211ba0eb
 target: esp32s3
 version: 2.0.0
