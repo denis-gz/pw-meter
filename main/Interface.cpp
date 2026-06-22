@@ -6,12 +6,14 @@
 
 #include <esp_wifi.h>
 #include <esp_ota_ops.h>
+#include "pin_creds.h"
+
+static const std::array<uint8_t, 4> SETTINGS_PIN = DEVICE_PIN;
 
 enum ScreenPage: uint8_t {
     SplashScreen,
     MainsPage,
     DevicePage,
-    NetworkPage,
     SettingsPage,
     LogPage,
     AboutPage,
@@ -21,6 +23,7 @@ enum ScreenPage: uint8_t {
 
 enum InputState {
     PageSelection,
+    PinInput,
     MenuSelection,
     ItemDisplay,
     ValueInput,
@@ -30,6 +33,7 @@ enum MenuItem {
     ItemNone,
     ItemWifiSsid,
     ItemWifiPassword,
+    ItemWifiInfo,
     ItemINoiseFloor,
     ItemICalib,
     ItemVCalib,
@@ -74,6 +78,10 @@ struct DisplayContext
     ScreenPage page {};
     InputState input_state {};
     MenuItem item_selected {};
+
+    bool settings_unlocked = false;
+    std::array<uint8_t, 4> pin_digits {};
+    uint8_t pin_index = 0;
 
     void set_next_page() {
         page = (ScreenPage) ((page + 1) % PageCount);
@@ -207,6 +215,14 @@ void PowerMeterApp::interface_task()
                 ESP_LOGI(TAG, "Idle timeout reached. Sleeping display.");
                 ssd1306_sleep(&m_oled, true);
                 ds.is_display_awake = false;
+                ds.settings_unlocked = false;
+                if (ds.page == SettingsPage) {
+                    ds.input_state = PageSelection;
+                    ds.item_selected = ItemNone;
+                    ds.pin_index = 0;
+                    ds.pin_digits.fill(0);
+                    ds.clear_lines();
+                }
             }
         }
     };
@@ -326,95 +342,120 @@ void PowerMeterApp::process_result(const ResultMessage& result)
             }
             break;
         }
-        case NetworkPage: {
-            if (ds.lines[0][0] == 0x20) {
-                wifi_config_t wifi {};
-                esp_wifi_get_config(WIFI_IF_STA, &wifi);
-
-                esp_netif_ip_info_t ip_info {};
-                esp_netif_get_ip_info(m_netif, &ip_info);
-
-                snprintf(ds.lines[0].data(), sizeof(display_line_t), "---- Wi-Fi -----");
-                snprintf(ds.lines[1].data(), sizeof(display_line_t), "SSID:%.11s", wifi.sta.ssid);
-                snprintf(ds.lines[2].data(), sizeof(display_line_t), "Channel:%d", wifi.sta.channel);
-
-                uint8_t a, b, c, d;
-                a = ip_info.ip.addr >> 0;
-                b = ip_info.ip.addr >> 8;
-                c = ip_info.ip.addr >> 16;
-                d = ip_info.ip.addr >> 24;
-                snprintf(ds.lines[4].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
-
-                a = ip_info.netmask.addr >> 0;
-                b = ip_info.netmask.addr >> 8;
-                c = ip_info.netmask.addr >> 16;
-                d = ip_info.netmask.addr >> 24;
-                snprintf(ds.lines[5].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
-
-                a = ip_info.gw.addr >> 0;
-                b = ip_info.gw.addr >> 8;
-                c = ip_info.gw.addr >> 16;
-                d = ip_info.gw.addr >> 24;
-                snprintf(ds.lines[6].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
-            }
-            break;
-        }
         case SettingsPage: {
             if (ds.lines[0][0] == 0x20) {
                 snprintf(ds.lines[0].data(), sizeof(display_line_t), "--- Settings ---");
-                switch (ds.input_state) {
-                    case PageSelection:
-                    case MenuSelection:
-                        snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID");
-                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "2. Wi-Fi passw");
-                        snprintf(ds.lines[3].data(), sizeof(display_line_t), "3. I noise flr");
-                        snprintf(ds.lines[4].data(), sizeof(display_line_t), "4. I calib");
-                        snprintf(ds.lines[5].data(), sizeof(display_line_t), "5. V calib");
-                        break;
-                    case ItemDisplay:
-                        switch (ds.item_selected) {
-                            case ItemNone:
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "- none -");
-                                break;
-                            case ItemWifiSsid: {
-                                wifi_config_t wifi {};
-                                esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", wifi.sta.ssid);
-                                break;
+                if (ds.settings_unlocked) {
+                    switch (ds.input_state) {
+                        case PageSelection:
+                        case MenuSelection:
+                            snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID");
+                            snprintf(ds.lines[2].data(), sizeof(display_line_t), "2. Wi-Fi passw");
+                            snprintf(ds.lines[3].data(), sizeof(display_line_t), "3. Wi-Fi info");
+                            snprintf(ds.lines[4].data(), sizeof(display_line_t), "4. I noise flr");
+                            snprintf(ds.lines[5].data(), sizeof(display_line_t), "5. I calib");
+                            snprintf(ds.lines[6].data(), sizeof(display_line_t), "6. V calib");
+                            break;
+                        case ItemDisplay:
+                            switch (ds.item_selected) {
+                                case ItemNone:
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "- none -");
+                                    break;
+                                case ItemWifiSsid: {
+                                    wifi_config_t wifi {};
+                                    esp_wifi_get_config(WIFI_IF_STA, &wifi);
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", wifi.sta.ssid);
+                                    break;
+                                }
+                                case ItemWifiPassword: {
+                                    wifi_config_t wifi {};
+                                    esp_wifi_get_config(WIFI_IF_STA, &wifi);
+                                    string_t pass {};
+                                    std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) wifi.sta.password)), '*');
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "2. Wi-Fi passw:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", pass.data());
+                                    break;
+                                }
+                                case ItemWifiInfo: {
+                                    wifi_config_t wifi {};
+                                    esp_wifi_get_config(WIFI_IF_STA, &wifi);
+
+                                    esp_netif_ip_info_t ip_info {};
+                                    esp_netif_get_ip_info(m_netif, &ip_info);
+
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. Wi-Fi info:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "SSID:%.11s", wifi.sta.ssid);
+                                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "Channel:%d", wifi.sta.channel);
+
+                                    uint8_t a, b, c, d;
+                                    a = ip_info.ip.addr >> 0;
+                                    b = ip_info.ip.addr >> 8;
+                                    c = ip_info.ip.addr >> 16;
+                                    d = ip_info.ip.addr >> 24;
+                                    snprintf(ds.lines[5].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
+
+                                    a = ip_info.netmask.addr >> 0;
+                                    b = ip_info.netmask.addr >> 8;
+                                    c = ip_info.netmask.addr >> 16;
+                                    d = ip_info.netmask.addr >> 24;
+                                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
+
+                                    a = ip_info.gw.addr >> 0;
+                                    b = ip_info.gw.addr >> 8;
+                                    c = ip_info.gw.addr >> 16;
+                                    d = ip_info.gw.addr >> 24;
+                                    snprintf(ds.lines[7].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
+                                    break;
+                                }
+                                case ItemINoiseFloor: {
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. I noise flr:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_i_noise_floor);
+                                    break;
+                                }
+                                case ItemICalib: {
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "4. I calibr:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", I_COEF);
+                                    break;
+                                }
+                                case ItemVCalib: {
+                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. V calibr:");
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", V_COEF);
+                                    break;
+                                }
+                                default:
+                                    break;
                             }
-                            case ItemWifiPassword: {
-                                wifi_config_t wifi {};
-                                esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                                string_t pass {};
-                                std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) wifi.sta.password)), '*');
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "2. Wi-Fi passw:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", pass.data());
-                                break;
+                            break;
+                        case ValueInput:
+                            snprintf(ds.lines[2].data(), sizeof(display_line_t), "Awaiting input");
+                            snprintf(ds.lines[3].data(), sizeof(display_line_t), " in console...");
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                else {
+                    if (ds.input_state == PageSelection) {
+                        snprintf(ds.lines[1].data(), sizeof(display_line_t), "Enter PIN code:");
+                        snprintf(ds.lines[3].data(), sizeof(display_line_t), "[Push to start]");
+                    }
+                    else if (ds.input_state == PinInput) {
+                        snprintf(ds.lines[1].data(), sizeof(display_line_t), "Enter PIN code:");
+
+                        // Dynamically build the input string: e.g., "[ * * 3 _ ]"
+                        char pin_str[16] = "[ _ _ _ _ ]";
+                        for (int i = 0; i < 4; i++) {
+                            int char_idx = 2 + (i * 2); // Map array to string spaces
+                            if (i < ds.pin_index) {
+                                pin_str[char_idx] = '*'; // Past digits
                             }
-                            case ItemINoiseFloor: {
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. I noise flr:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_i_noise_floor);
-                                break;
+                            else if (i == ds.pin_index) {
+                                pin_str[char_idx] = '0' + ds.pin_digits[i]; // Current digit
                             }
-                            case ItemICalib: {
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "4. I calibr:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", I_COEF);
-                                break;
-                            }
-                            case ItemVCalib: {
-                                snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. V calibr:");
-                                snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", V_COEF);
-                                break;
-                            }
-                            default:
-                                break;
                         }
-                        break;
-                    case ValueInput:
-                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "Awaiting input");
-                        snprintf(ds.lines[3].data(), sizeof(display_line_t), "in console...");
-                        break;
+                        snprintf(ds.lines[3].data(), sizeof(display_line_t), "%s", pin_str);
+                    }
                 }
             }
             break;
@@ -435,10 +476,10 @@ void PowerMeterApp::process_result(const ResultMessage& result)
             if (ds.lines[0][0] == 0x20) {
                 auto app = esp_app_get_description();
                 snprintf(ds.lines[0].data(), sizeof(display_line_t), "---- About -----");
-                snprintf(ds.lines[1].data(), sizeof(display_line_t), "Power Meter");
+                snprintf(ds.lines[1].data(), sizeof(display_line_t), "PW-Meter");
                 snprintf(ds.lines[3].data(), sizeof(display_line_t), "Ver: %.11s", app->version);
                 snprintf(ds.lines[4].data(), sizeof(display_line_t), "IDF: %.11s", app->idf_ver);
-                snprintf(ds.lines[6].data(), sizeof(display_line_t), "(c) 2026");
+                snprintf(ds.lines[6].data(), sizeof(display_line_t), "Copyrt (c) 2026");
                 snprintf(ds.lines[7].data(), sizeof(display_line_t), "Denys Zavorotnyi");
             }
             break;
@@ -469,33 +510,41 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
 {
     switch (encoder.action) {
         case EncoderInputAction::Next:
-            switch (ds.input_state) {
-                case PageSelection:
-                    ds.pause = 0;
-                    ds.set_next_page();
-                    ds.clear_lines();
-                    break;
-                case MenuSelection:
-                    ds.set_next_item();
-                    break;
-                default:
-                    break;
-            }
-            break;
         case EncoderInputAction::Prev:
             switch (ds.input_state) {
                 case PageSelection:
                     ds.pause = 0;
-                    ds.set_prev_page();
+                    if (encoder.action == EncoderInputAction::Next) {
+                        ds.set_next_page();
+                    }
+                    else {
+                        ds.set_prev_page();
+                    }
                     ds.clear_lines();
                     break;
                 case MenuSelection:
-                    ds.set_prev_item();
+                    if (encoder.action == EncoderInputAction::Next) {
+                        ds.set_next_item();
+                    }
+                    else {
+                        ds.set_prev_item();
+                    }
+                    break;
+                case PinInput:
+                    // Rotate to change the current digit (0-9 with wrap-around)
+                    if (encoder.action == EncoderInputAction::Next) {
+                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 1) % 10;
+                    }
+                    else {
+                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 9) % 10;
+                    }
+                    ds.clear_lines();
                     break;
                 default:
                     break;
             }
             break;
+
         case EncoderInputAction::Confirm:
             switch (ds.input_state) {
                 case PageSelection:
@@ -509,10 +558,37 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             ESP_LOGI(TAG, "Paused");
                         }
                     }
-                    if (ds.page == SettingsPage) {
-                        ds.input_state = MenuSelection;
-                        ds.item_selected = ItemDefault;
+                    else if (ds.page == SettingsPage) {
+                        if (ds.settings_unlocked) {
+                            ds.input_state = MenuSelection;
+                            ds.item_selected = ItemDefault;
+                        }
+                        else {
+                            ds.input_state = PinInput;
+                            ds.pin_index = 0;
+                            ds.pin_digits.fill(0);
+                        }
+                        ds.clear_lines();
                     }
+                    break;
+                case PinInput:
+                    // Confirm the current digit and move to the next
+                    ds.pin_index++;
+                    if (ds.pin_index >= 4) {
+                        // Validate PIN
+                        if (ds.pin_digits == SETTINGS_PIN) {
+                            ds.settings_unlocked = true;
+                            ds.input_state = MenuSelection;
+                            ds.item_selected = ItemDefault;
+                            ESP_LOGI(TAG, "Settings unlocked.");
+                        }
+                        else {
+                            // Failed: Kick back to prompt
+                            ds.input_state = PageSelection;
+                            ESP_LOGW(TAG, "Invalid PIN entered.");
+                        }
+                    }
+                    ds.clear_lines();
                     break;
                 case MenuSelection:
                     ds.clear_lines();
@@ -556,11 +632,18 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     break;
             }
             break;
+
         case EncoderInputAction::Back:
             switch (ds.input_state) {
                 case PageSelection:
-                    ESP_LOGI(TAG, "Restarting...");
-                    stop_tasks();
+                    //ESP_LOGI(TAG, "Restarting...");
+                    //stop_tasks();
+                    ds.page = MainsPage;
+                    break;
+                case PinInput:
+                    // Long press cancels PIN entry
+                    ds.clear_lines();
+                    ds.input_state = PageSelection;
                     break;
                 case MenuSelection:
                     ds.clear_lines();
