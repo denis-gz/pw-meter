@@ -50,6 +50,8 @@ struct DisplayContext
     // Filter filter_sh{ 0.3 };
 
     bool with_display = false;
+    bool is_display_awake = true;
+    TickType_t last_interaction_tick = 0;
 
     float cpu0 = 0;
     float cpu1 = 0;
@@ -158,6 +160,10 @@ void PowerMeterApp::interface_task()
     ESP_LOGI(TAG, "interface_task: started");
     setup_interface();
 
+    ds.is_display_awake = true;
+    ds.last_interaction_tick = xTaskGetTickCount();
+    const TickType_t DISPLAY_TIMEOUT_TICKS = pdMS_TO_TICKS(60000);
+
     InterfaceTaskMessage qmsg;
     while (!m_stop_tasks) {
         if (xQueueReceive(m_interface_queue, &qmsg, pdMS_TO_TICKS(100))) {
@@ -166,14 +172,41 @@ void PowerMeterApp::interface_task()
                     process_result(qmsg.result);
                     break;
                 case MessageType::EncoderInputMessage:
-                    process_encoder_input(qmsg.encoder_input);
+                    if (!ds.is_display_awake) {
+                        // Asleep: Wake ONLY on clicks (Confirm or Back)
+                        if (qmsg.encoder_input.action == EncoderInputAction::Confirm ||
+                            qmsg.encoder_input.action == EncoderInputAction::Back) {
+
+                            ESP_LOGI(TAG, "Wake click detected. Powering up OLED.");
+                            ssd1306_sleep(&m_oled, false);
+                            ds.is_display_awake = true;
+                            ds.last_interaction_tick = xTaskGetTickCount();
+                        }
+                        // We intentionally do NOT call process_encoder_input here.
+                        // This consumes the click and prevents phantom scrolling while asleep.
+                    }
+                    else {
+                        // Awake: Reset the sleep timer and process the action normally
+                        ds.last_interaction_tick = xTaskGetTickCount();
+                        process_encoder_input(qmsg.encoder_input);
+                    }
                     break;
                 case MessageType::ConsoleInputMessage:
+                    ds.last_interaction_tick = xTaskGetTickCount();
                     process_console_input(qmsg.console_input);
                     break;
                 case MessageType::LogMessage:
                     process_log(qmsg.log);
                     break;
+            }
+        }
+
+        // --- IDLE TIMEOUT EVALUATION ---
+        if (ds.with_display && ds.is_display_awake) {
+            if ((xTaskGetTickCount() - ds.last_interaction_tick) > DISPLAY_TIMEOUT_TICKS) {
+                ESP_LOGI(TAG, "Idle timeout reached. Sleeping display.");
+                ssd1306_sleep(&m_oled, true);
+                ds.is_display_awake = false;
             }
         }
     };
@@ -426,7 +459,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                 inverse = (i > 0) && (i == ds.item_selected);
             }
         }
-        if (ds.with_display) {
+        if (ds.with_display && ds.is_display_awake) {
             ssd1306_display_text(&m_oled, i, ds.lines[i].data(), sizeof(display_line_t) - 1, inverse);
         }
     }
