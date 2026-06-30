@@ -73,13 +73,26 @@ private:
     };
 
     struct MqttMessage {
-        float f_v;
-        float f_i;
-        float f_va;
-        float f_w;
-        float f_hz;
-        float f_wh;
-        float f_pf;
+        struct PowerMetrics {
+            float f_v;
+            float f_i;
+            float f_va;
+            float f_w;
+            float f_hz;
+            float f_wh;
+            float f_pf;
+        };
+        struct DeviceMetrics {
+            time_t uptime;
+            float  cpu0;
+            float  cpu1;
+            size_t heap;
+            size_t lblk;
+        };
+
+        time_t        time;
+        PowerMetrics  power;
+        DeviceMetrics device;
     };
 
     enum class EncoderInputAction {
@@ -123,6 +136,8 @@ private:
         };
     };
 
+    friend struct DisplayContext;
+
     static void on_time_sync(timeval* tv);
 
     void setup_reader(bool disposing = false);
@@ -132,6 +147,7 @@ private:
 
     void setup_telemetry(bool disposing = false);
     void setup_wifi(bool disposing = false);
+    void setup_mqtt(bool disposing = false);
     void setup_indicator(bool disposing = false);
 
     void interface_task();
@@ -145,8 +161,6 @@ private:
     void on_mqtt_event(esp_event_base_t event_base, int32_t event_id, void* event_data);
     void on_wifi_event(esp_event_base_t event_base, int32_t event_id, void* event_data);
     void publish_mqtt_message(const MqttMessage& msg);
-    void set_wifi_ssid(string_t value);
-    void set_wifi_pass(string_t value);
 
     void process_result(const ResultMessage& result);
     void process_encoder_input(const EncoderInputMessage& encoder);
@@ -163,11 +177,18 @@ private:
     bool input_value(float& value);
     bool input_value(string_t& value);
 
+    void set_wifi_ssid(const string_t& value);
+    void set_wifi_pass(const string_t& value);
+    void set_mqtt_uri(const string_t& value);
+    void set_mqtt_creds(const string_t& value);
+    void set_mqtt_topic(const string_t& value);
+
+    void get_device_metrics(MqttMessage& m);
     void post_log(display_line_t message);
     void set_indicator(led_mode_t mode);
 
 private:
-    static timeval s_start_time;
+    static std::atomic<timeval> s_start_time;
 
     adc_channel_t m_adc_v_channel_id {};
     adc_channel_t m_adc_i_channel_id {};
@@ -201,14 +222,15 @@ private:
     //float m_cos_phi = 0;
     float m_frequency = 0;
     //float m_vi_sample_shift = 0;
-    double m_acc_energy_ws = 0;
 
     // ***** DEBUG *****
     //volatile uint32_t m_error_count = 0;
     //volatile uint32_t m_phase_shift = 0;
     // *****
 
-    volatile bool m_stop_tasks = false;
+    std::atomic<double> m_acc_energy {};
+    std::atomic_bool m_acc_energy_saved {};
+    std::atomic_bool m_stop_tasks {};
 
     TaskHandle_t m_compute_task {};
 

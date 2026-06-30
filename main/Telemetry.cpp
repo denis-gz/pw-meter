@@ -5,8 +5,10 @@
 #include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <mqtt_client.h>
+#include <optional>
 
-#include "mqtt_creds.h"
+#define POWER_TOPIC  "/metrics/power"
+#define DEVICE_TOPIC "/metrics/device"
 
 void PowerMeterApp::telemetry_task()
 {
@@ -45,12 +47,7 @@ void PowerMeterApp::setup_wifi(bool disposing)
     if (disposing) {
         esp_netif_sntp_deinit();
 
-        if (m_mqtt) {
-            esp_mqtt_client_stop(m_mqtt);
-            esp_mqtt_client_unregister_event(m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event));
-            esp_mqtt_client_destroy(m_mqtt);
-            m_mqtt = nullptr;
-        }
+        setup_mqtt(disposing);
 
         esp_event_handler_unregister(IP_EVENT, ESP_EVENT_ANY_ID, member_cast<esp_event_handler_t>(&PowerMeterApp::on_wifi_event));
         esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, member_cast<esp_event_handler_t>(&PowerMeterApp::on_wifi_event));
@@ -87,6 +84,48 @@ void PowerMeterApp::setup_wifi(bool disposing)
     }
 }
 
+void PowerMeterApp::setup_mqtt(bool disposing)
+{
+    if (disposing) {
+        if (m_mqtt) {
+            esp_mqtt_client_stop(m_mqtt);
+            esp_mqtt_client_unregister_event(m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event));
+            esp_mqtt_client_destroy(m_mqtt);
+            xEventGroupClearBits(m_wifi_event_group, MQTT_STARTED_BIT);
+            m_mqtt = nullptr;
+        }
+    }
+    else {
+        if (!m_settings.mqtt_uri[0]) {
+            ESP_LOGW(TAG, "MQTT URI not set");
+            return;
+        }
+
+        esp_mqtt_client_config_t mqtt_cfg {};
+        mqtt_cfg.broker.address.uri = m_settings.mqtt_uri.data();
+
+        decltype(m_settings.mqtt_creds) creds(m_settings.mqtt_creds);
+        if (creds[0]) {
+            mqtt_cfg.credentials.username = creds.data();
+            char* sep = strchr(creds.data(), ':');
+            if (sep) {
+                *sep = '\0';
+                mqtt_cfg.credentials.authentication.password = sep + 1;
+            }
+        }
+
+        m_mqtt = esp_mqtt_client_init(&mqtt_cfg);
+        if (m_mqtt) {
+            esp_mqtt_client_register_event(m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event), this);
+            esp_mqtt_client_start(m_mqtt);
+            xEventGroupSetBits(m_wifi_event_group, MQTT_STARTED_BIT);
+        }
+        else {
+            ESP_LOGW(TAG, "MQTT client init failed!");
+        }
+    }
+}
+
 void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT) {
@@ -110,30 +149,21 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
                 esp_netif_sntp_init(&config);
                 break;
             }
-            case WIFI_EVENT_USER_SET_SSID: {
-                string_t ssid = *(string_t*) event_data;
-                ESP_LOGI(TAG, "Setting new Wi-Fi network name: %s", ssid.data());
-
+            case WIFI_EVENT_USER_UPDATE_CREDS: {
                 wifi_config_t wifi {};
                 esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                memcpy(wifi.sta.ssid, ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(ssid.data())));
+
+                memset(wifi.sta.ssid, 0, sizeof(wifi.sta.ssid));
+                memcpy(wifi.sta.ssid, m_settings.wifi_ssid.data(), std::min(sizeof(wifi.sta.ssid), strlen(m_settings.wifi_ssid.data())));
+
+                memset(wifi.sta.password, 0, sizeof(wifi.sta.password));
+                memcpy(wifi.sta.password, m_settings.wifi_pass.data(), std::min(sizeof(wifi.sta.password), strlen(m_settings.wifi_pass.data())));
 
                 esp_wifi_stop();
                 esp_wifi_set_config(WIFI_IF_STA, &wifi);
                 esp_wifi_start();
-                break;
-            }
-            case WIFI_EVENT_USER_SET_PASS: {
-                string_t pass = *(string_t*) event_data;
-                ESP_LOGI(TAG, "Setting new Wi-Fi password: %s", pass.data());
 
-                wifi_config_t wifi {};
-                esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                memcpy(wifi.sta.password, pass.data(), std::min(sizeof(wifi.sta.password), strlen(pass.data())));
-
-                esp_wifi_stop();
-                esp_wifi_set_config(WIFI_IF_STA, &wifi);
-                esp_wifi_start();
+                set_indicator(LED_STATE_WIFI_SEARCHING);
                 break;
             }
             case WIFI_EVENT_STA_START: {
@@ -156,20 +186,12 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
         set_indicator(LED_STATE_CONNECTED);
         post_log({ "Network ready" });
 
-        auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
-        if (!(uxBits & MQTT_STARTED_BIT)) {
-            esp_mqtt_client_config_t mqtt_cfg {};
-            mqtt_cfg.broker.address.uri = MQTT_BROKER_URI;
-
-            m_mqtt = esp_mqtt_client_init(&mqtt_cfg);
-            ESP_ERROR_CHECK(esp_mqtt_client_register_event(
-                m_mqtt, MQTT_EVENT_ANY, member_cast<esp_event_handler_t>(&PowerMeterApp::on_mqtt_event), this));
-
-            ESP_ERROR_CHECK(esp_mqtt_client_start(m_mqtt));
-            xEventGroupSetBits(m_wifi_event_group, MQTT_STARTED_BIT);
+        auto uxBits = xEventGroupWaitBits(m_wifi_event_group, MQTT_STARTED_BIT, pdFALSE, pdFALSE, 0);
+        if (uxBits & MQTT_STARTED_BIT) {
+            esp_mqtt_client_reconnect(m_mqtt);
         }
         else {
-            esp_mqtt_client_reconnect(m_mqtt);
+            setup_mqtt();
         }
     }
 }
@@ -194,72 +216,143 @@ void PowerMeterApp::on_mqtt_event(esp_event_base_t event_base, int32_t event_id,
     }
 }
 
+static constexpr const char* POWER_JSON_TEMPLATE = R"({
+  "timestamp": %llu,
+  "voltage": %s,
+  "current": %s,
+  "frequency": %s,
+  "full_power": %s,
+  "real_power": %s,
+  "power_factor": %s,
+  "energy": %s
+})";
+
+static constexpr const char* DEVICE_JSON_TEMPLATE = R"({
+  "timestamp": %llu,
+  "uptime": %llu,
+  "cpu0": %s,
+  "cpu1": %s,
+  "heap": %u,
+  "lblk": %u
+})";
+
 void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
 {
-    auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, 0);
-    if (uxBits & WIFI_CONNECTED_BIT) {
-        int ret;
-        do {
-            string_t buf;
-            size_t len;
+    static constexpr auto format_float = [] (char* buf, size_t size, const char* fmt, float val) {
+        if (std::isnan(val))
+            strncpy(buf, "null", size);
+        else
+            snprintf(buf, size, fmt, val);
+        return buf;
+    };
 
-            len = snprintf(buf.data(), sizeof(buf), "%.0f", msg.f_v);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/voltage", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_i);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/current", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_va);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/full_power", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.1f", msg.f_w);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/real_power", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_wh);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/energy", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_pf);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/power_factor", buf.data(), len, 0, 0), ret < 0)
-                break;
-            len = snprintf(buf.data(), sizeof(buf), "%.2f", msg.f_hz);
-            if (ret = esp_mqtt_client_publish(m_mqtt, MQTT_PUB_TOPIC "/frequency", buf.data(), len, 0, 0), ret < 0)
-                break;
+    auto uxBits = xEventGroupWaitBits(m_wifi_event_group, WIFI_CONNECTED_BIT | MQTT_STARTED_BIT, pdFALSE, pdFALSE, 0);
+    if (!(uxBits & MQTT_STARTED_BIT))
+        return;
+    if (uxBits & WIFI_CONNECTED_BIT) {
+        char buf[7][64];
+        char json[512];
+        std::optional<int> ret;
+
+        do {
+            if (msg.time) {
+                size_t len = snprintf(json, sizeof(json), POWER_JSON_TEMPLATE,
+                    msg.time,
+                    format_float(buf[0], sizeof(buf[0]), "%.1f", msg.power.f_v),
+                    format_float(buf[1], sizeof(buf[1]), "%.2f", msg.power.f_i),
+                    format_float(buf[2], sizeof(buf[2]), "%.2f", msg.power.f_hz),
+                    format_float(buf[3], sizeof(buf[3]), "%.1f", msg.power.f_va),
+                    format_float(buf[4], sizeof(buf[4]), "%.1f", msg.power.f_w),
+                    format_float(buf[5], sizeof(buf[5]), "%.2f", msg.power.f_pf),
+                    format_float(buf[6], sizeof(buf[6]), "%.1f", msg.power.f_wh)
+                );
+                decltype(m_settings.mqtt_topic) topic(m_settings.mqtt_topic);
+                strlcat(topic.data(), POWER_TOPIC, sizeof(topic));
+                ret = esp_mqtt_client_publish(m_mqtt, topic.data(), json, len, 0, 0);
+                if (ret < 0)
+                    break;
+            }
+            if (msg.device.uptime) {
+                size_t len = snprintf(json, sizeof(json), DEVICE_JSON_TEMPLATE,
+                    msg.time,
+                    msg.device.uptime,
+                    format_float(buf[0], sizeof(buf[0]), "%4.1f", msg.device.cpu0),
+                    format_float(buf[1], sizeof(buf[1]), "%4.1f", msg.device.cpu1),
+                    msg.device.heap,
+                    msg.device.lblk
+                );
+                decltype(m_settings.mqtt_topic) topic(m_settings.mqtt_topic);
+                strlcat(topic.data(), DEVICE_TOPIC, sizeof(topic));
+                ret = esp_mqtt_client_publish(m_mqtt, topic.data(), json, len, 0, 0);
+            }
         }
         while (0);
 
-        if (ret < 0) {
-            set_indicator(LED_STATE_MQTT_ERROR);
-            post_log({ "MQTT error" });
-        }
-        else {
-            set_indicator(LED_STATE_MQTT_TX);
+        if (ret.has_value()) {
+            if (ret < 0) {
+                set_indicator(LED_STATE_MQTT_ERROR);
+                post_log({ "MQTT error" });
+            }
+            else {
+                set_indicator(LED_STATE_MQTT_TX);
+            }
         }
     }
     else if (m_netif) {
-        post_log({ "Wi-Fi discon" });
+        post_log({ "Wi-Fi disconn" });
     }
 }
 
-void PowerMeterApp::set_wifi_ssid(string_t value)
+void PowerMeterApp::set_wifi_ssid(const string_t& value)
 {
-    SettingsManager::save(KEY_WIFI_SSID, value.data());
-    esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_SET_SSID, &value, sizeof(value), pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "Setting new Wi-Fi SSID: %s", value.data());
+    m_settings.wifi_ssid.fill(0);
+    SettingsManager::save(KEY_WIFI_SSID, strncpy(m_settings.wifi_ssid.data(), value.data(), m_settings.wifi_ssid.size() - 1));
+    esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_UPDATE_CREDS, nullptr, 0, pdMS_TO_TICKS(10));
 }
 
-void PowerMeterApp::set_wifi_pass(string_t value)
+void PowerMeterApp::set_wifi_pass(const string_t& value)
 {
-    SettingsManager::save(KEY_WIFI_PASS, value.data());
-    esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_SET_PASS, &value, sizeof(value), pdMS_TO_TICKS(10));
+    ESP_LOGI(TAG, "Setting new Wi-Fi passphrase: %s", value.data());
+    m_settings.wifi_pass.fill(0);
+    SettingsManager::save(KEY_WIFI_PASS, strncpy(m_settings.wifi_pass.data(), value.data(), m_settings.wifi_pass.size() - 1));
+    esp_event_post(WIFI_EVENT, WIFI_EVENT_USER_UPDATE_CREDS, nullptr, 0, pdMS_TO_TICKS(10));
+}
+
+void PowerMeterApp::set_mqtt_uri(const string_t& value)
+{
+    setup_mqtt(kDisposing);
+    ESP_LOGI(TAG, "Setting new MQTT URI: %s", value.data());
+    m_settings.mqtt_uri.fill(0);
+    SettingsManager::save(KEY_MQTT_URI, strncpy(m_settings.mqtt_uri.data(), value.data(), m_settings.mqtt_uri.size() - 1));
+    setup_mqtt();
+}
+
+void PowerMeterApp::set_mqtt_creds(const string_t& value)
+{
+    setup_mqtt(kDisposing);
+    ESP_LOGI(TAG, "Setting new MQTT creds: %s", value.data());
+    m_settings.mqtt_creds.fill(0);
+    SettingsManager::save(KEY_MQTT_CREDS, strncpy(m_settings.mqtt_creds.data(), value.data(), m_settings.mqtt_creds.size() - 1));
+    setup_mqtt();
+}
+
+void PowerMeterApp::set_mqtt_topic(const string_t& value)
+{
+    ESP_LOGI(TAG, "Setting new MQTT topic: %s", value.data());
+    m_settings.mqtt_topic.fill(0);
+    SettingsManager::save(KEY_MQTT_TOPIC, strncpy(m_settings.mqtt_topic.data(), value.data(), m_settings.mqtt_topic.size() - 1));
 }
 
 void PowerMeterApp::on_time_sync(timeval* tv)
 {
-    if (!s_start_time.tv_sec) {
+    if (!static_cast<timeval>(s_start_time).tv_sec) {
         s_start_time = *tv;
-        if (tm* local = std::localtime(&tv->tv_sec)) {
-            char buf[64];
-            strftime(buf, sizeof(buf), "%c", local);
-            ESP_LOGI(TAG, "Time is %s", buf);
-        }
+    }
+    std::tm local;
+    if (localtime_r(&tv->tv_sec, &local)) {
+        char buf[64];
+        strftime(buf, sizeof(buf), "%c", &local);
+        ESP_LOGI(TAG, "Time is %s", buf);
     }
 }

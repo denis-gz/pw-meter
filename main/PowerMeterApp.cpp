@@ -1,6 +1,6 @@
 #include "PowerMeterApp.h"
 
-timeval PowerMeterApp::s_start_time {};
+std::atomic<timeval> PowerMeterApp::s_start_time {};
 
 PowerMeterApp::PowerMeterApp()
     : m_encoder(CONFIG_PIN_ENCODER_A, CONFIG_PIN_ENCODER_B, [this](bool is_ccw) { on_encoder_rotate(is_ccw); })
@@ -9,6 +9,8 @@ PowerMeterApp::PowerMeterApp()
 {
     SettingsManager::setup();
     SettingsManager::load(m_settings);
+
+    m_acc_energy = m_settings.acc_energy;
 
     setup_console_input();
     start_tasks();
@@ -19,6 +21,7 @@ PowerMeterApp::~PowerMeterApp()
     stop_tasks();
     setup_console_input(kDisposing);
 
+    SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy);
     SettingsManager::setup(kDisposing);
 
     vTaskDelay(pdMS_TO_TICKS(500));

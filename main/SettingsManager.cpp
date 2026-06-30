@@ -36,10 +36,24 @@ void SettingsManager::load(DeviceSettings& settings)
     if (nvs_get_str(handle, KEY_WIFI_PASS, settings.wifi_pass.data(), &len) != ESP_OK)
         settings.wifi_pass.fill(0);
 
-    get_float(handle, KEY_I_NOISE_FLOOR, settings.i_noise_floor);
-    get_float(handle, KEY_I_COEF, settings.i_coef);
-    get_float(handle, KEY_V_COEF, settings.v_coef);
+    len = settings.mqtt_uri.size();
+    if (nvs_get_str(handle, KEY_MQTT_URI, settings.mqtt_uri.data(), &len) != ESP_OK)
+        settings.mqtt_uri.fill(0);
 
+    len = settings.mqtt_creds.size();
+    if (nvs_get_str(handle, KEY_MQTT_CREDS, settings.mqtt_creds.data(), &len) != ESP_OK)
+        settings.mqtt_creds.fill(0);
+
+    len = settings.mqtt_topic.size();
+    if (nvs_get_str(handle, KEY_MQTT_TOPIC, settings.mqtt_topic.data(), &len) != ESP_OK)
+        settings.mqtt_topic.fill(0);
+
+    nvs_get_u32(handle, KEY_MQTT_PERIOD, reinterpret_cast<uint32_t*>(&settings.mqtt_period));
+    nvs_get_u32(handle, KEY_I_NOISE_FLOOR, reinterpret_cast<uint32_t*>(&settings.i_noise_floor));
+    nvs_get_u32(handle, KEY_I_COEF, reinterpret_cast<uint32_t*>(&settings.i_coef));
+    nvs_get_u32(handle, KEY_V_COEF, reinterpret_cast<uint32_t*>(&settings.v_coef));
+    nvs_get_u32(handle, KEY_V_ACC_ENERGY_SAVE, reinterpret_cast<uint32_t*>(&settings.v_acc_energy_save));
+    nvs_get_u64(handle, KEY_ACC_ENERGY, reinterpret_cast<uint64_t*>(&settings.acc_energy));
     nvs_close(handle);
 }
 
@@ -56,41 +70,29 @@ void SettingsManager::save(const char* key, const char* value) {
 void SettingsManager::save(const char* key, float value) {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
-        set_float(handle, key, value);
+        nvs_set_u32(handle, key, *reinterpret_cast<uint32_t*>(&value));
         nvs_commit(handle);
         nvs_close(handle);
         ESP_LOGI(TAG, "Saved float [%s]: %f", key, value);
     }
 }
 
-void SettingsManager::save(const char* key, uint32_t value) {
+void SettingsManager::save(const char* key, double value) {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_set_u32(handle, key, value);
+        nvs_set_u64(handle, key, *reinterpret_cast<uint64_t*>(&value));
         nvs_commit(handle);
         nvs_close(handle);
-        ESP_LOGI(TAG, "Saved integer [%s]: %u", key, value);
+        ESP_LOGI(TAG, "Saved double [%s]: %f", key, value);
     }
 }
 
-esp_err_t SettingsManager::set_float(nvs_handle_t handle, const char* key, float value)
-{
-    union {
-        float val_f32;
-        uint32_t val_u32;
-    };
-    val_f32 = value;
-    return nvs_set_u32(handle, key, val_u32);
-}
-
-esp_err_t SettingsManager::get_float(nvs_handle_t handle, const char* key, float& value)
-{
-    union {
-        float val_f32;
-        uint32_t val_u32;
-    };
-    esp_err_t err = nvs_get_u32(handle, key, &val_u32);
-    if (err == ESP_OK)
-        value = val_f32;
-    return err;
+void SettingsManager::save(const char* key, uint8_t value) {
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, key, value);
+        nvs_commit(handle);
+        nvs_close(handle);
+        ESP_LOGI(TAG, "Saved byte [%s]: %u", key, value);
+    }
 }

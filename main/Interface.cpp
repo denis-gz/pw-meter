@@ -10,6 +10,8 @@
 
 static const std::array<uint8_t, 4> SETTINGS_PIN = DEVICE_PIN;
 
+#define READINGS_PER_SECOND 5
+
 enum ScreenPage: uint8_t {
     SplashScreen,
     MainsPage,
@@ -30,16 +32,39 @@ enum InputState {
 };
 
 enum MenuItem {
-    ItemNone,
+    ItemNone = -1,
     ItemWifiSsid,
     ItemWifiPassword,
     ItemWifiInfo,
+    ItemMqttUri,
+    ItemMqttCreds,
+    ItemMqttTopic,
+    ItemMqttPeriod,
     ItemINoiseFloor,
     ItemICalib,
     ItemVCalib,
+    ItemVEnergySave,
+    ItemResetEnrgy,
 
     ItemCount,
     ItemDefault = ItemWifiSsid,
+};
+
+static const int N_DISPLAYED_ITEMS = 7;
+
+static constexpr const char MENU_ITEMS[ItemCount][16] {
+    { "1. Wi-Fi SSID" },
+    { "2. Wi-Fi passw" },
+    { "3. Wi-Fi info" },
+    { "4. MQTT URI" },
+    { "5. MQTT creds" },
+    { "6. MQTT topic" },
+    { "7. MQTT period" },
+    { "8. I noise flr" },
+    { "9. I calib" },
+    { "10. V calib" },
+    { "11. V nrgy save" },
+    { "12. Reset enrgy" }
 };
 
 struct DisplayContext
@@ -57,31 +82,29 @@ struct DisplayContext
     bool is_display_awake = true;
     TickType_t last_interaction_tick = 0;
 
-    float cpu0 = 0;
-    float cpu1 = 0;
     uint32_t counter = 0;
     uint32_t pause = 0;
 
-    // Display matrix is 16x8 chars
-    display_line_t lines[8] {};
-    // Inversion flags for each line
-    int inverse[8] {};
-
-    void clear_lines(bool clear_inverse = true) {
-        memset(lines, 0x20, sizeof(lines));
-        if (clear_inverse)
-            memset(inverse, 0, sizeof(inverse));
-    }
+    display_line_t lines[8] {};     // Display matrix is 16x8 chars
+    int inverse[8] {};              // Inversion flags for each line
 
     std::list<display_line_t> log;
 
     ScreenPage page {};
     InputState input_state {};
     MenuItem item_selected {};
+    uint8_t first_displayed_menu_item = 0;
+    PowerMeterApp::MqttMessage::DeviceMetrics dev {};
 
     bool settings_unlocked = false;
-    std::array<uint8_t, 4> pin_digits {};
+    std::array<uint8_t, std::size(SETTINGS_PIN)> pin_digits {};
     uint8_t pin_index = 0;
+
+    void clear_screen(bool clear_inverse = true) {
+        memset(lines, 0x20, sizeof(lines));
+        if (clear_inverse)
+            memset(inverse, 0, sizeof(inverse));
+    }
 
     void set_next_page() {
         page = (ScreenPage) ((page + 1) % PageCount);
@@ -97,14 +120,20 @@ struct DisplayContext
 
     void set_next_item() {
         item_selected = (MenuItem) ((item_selected + 1) % ItemCount);
-        if (item_selected == ItemNone)
-            item_selected = ItemDefault;
+        update_viewport();
     }
 
     void set_prev_item() {
         item_selected = (MenuItem) ((item_selected + ItemCount - 1) % ItemCount);
-        if (item_selected == ItemNone)
-            item_selected = (MenuItem) (ItemCount - 1);
+        update_viewport();
+    }
+
+    void update_viewport() {
+        if (first_displayed_menu_item > item_selected)
+            first_displayed_menu_item = item_selected;
+        else if (first_displayed_menu_item < item_selected - N_DISPLAYED_ITEMS + 1)
+            first_displayed_menu_item = item_selected - N_DISPLAYED_ITEMS + 1;
+        lines[0].fill(0x20);    // Invalidate the page
     }
 };
 
@@ -219,9 +248,10 @@ void PowerMeterApp::interface_task()
                 if (ds.page == SettingsPage) {
                     ds.input_state = PageSelection;
                     ds.item_selected = ItemNone;
+                    ds.first_displayed_menu_item = 0;
                     ds.pin_index = 0;
                     ds.pin_digits.fill(0);
-                    ds.clear_lines();
+                    ds.clear_screen();
                 }
             }
         }
@@ -235,57 +265,71 @@ void PowerMeterApp::interface_task()
 void PowerMeterApp::process_result(const ResultMessage& result)
 {
     MqttMessage m {};
-    m.f_v = ds.filter_v.process(result.v_rms, &ds.inverse[0]);
-    m.f_i = (result.i_rms == 0.0f)
+    m.time = std::time(0);
+    m.power.f_v = ds.filter_v.process(result.v_rms, &ds.inverse[0]);
+    m.power.f_i = (result.i_rms == 0.0f)
         ? (ds.filter_i.reset(), ds.inverse[1] = false, 0.0f)
         : ds.filter_i.process(result.i_rms, &ds.inverse[1]);
-    m.f_va = m.f_v * m.f_i;
-    m.f_w = (result.real_power == 0.0f)
+    m.power.f_va = m.power.f_v * m.power.f_i;
+    m.power.f_w = (result.real_power == 0.0f)
         ? (ds.filter_w.reset(), ds.inverse[2] = false, 0.0f)
         : ds.filter_w.process(result.real_power, &ds.inverse[2]);
-    m.f_hz = (m.f_v < 10)
+    m.power.f_hz = (m.power.f_v < 10)
         ? (ds.filter_hz.reset(), ds.inverse[6] = false, NAN)
         : ds.filter_hz.process(result.frequency, &ds.inverse[6]);
     //float f_cos = filter_pf.process(result.cos_phi);
     //float f_sh = filter_sh.process(result.vi_shift);
-    m.f_wh = result.energy;
-    m.f_pf = NAN;
-    if (m.f_va > 0.0f)
-        m.f_pf = m.f_w / m.f_va;
-    if (m.f_pf > 1.0f)
-        m.f_pf = 1.0f;
-    if (m.f_pf < -1.0f)
-        m.f_pf = -1.0f;
-
-    ++ds.counter;
-    if (ds.counter % 5 == 0)    // Roughly 1 sec
-        m_cpu_meter.get_load(ds.cpu0, ds.cpu1);
-
-    if (ds.counter % 15 == 0) { // Roughly 3 sec
-        if (xQueueSend(m_telemetry_queue, &m, 0) != pdPASS) {
-            ESP_LOGW(TAG, "Telemetry queue is full, dropping MqttMessage");
+    if (m.power.f_v < m_settings.v_acc_energy_save) {
+        if (!m_acc_energy_saved) {
+            SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy);
+            m_acc_energy_saved = true;
         }
     }
+    else {
+        m_acc_energy_saved = false;
+    }
+    m.power.f_wh = result.energy;
+    m.power.f_pf = NAN;
+    if (m.power.f_va > 0.0f)
+        m.power.f_pf = m.power.f_w / m.power.f_va;
+    if (m.power.f_pf > 1.0f)
+        m.power.f_pf = 1.0f;
+    if (m.power.f_pf < -1.0f)
+        m.power.f_pf = -1.0f;
+
+    ++ds.counter;
+
+    // Period is 1 sec on DevicePage; 5 sec in any other condition
+    if (ds.counter % (uint32_t) (READINGS_PER_SECOND * (ds.page == DevicePage ? 1 : 5)) == 0) {
+        get_device_metrics(m);
+        ds.dev = m.device;
+    }
+
     if (ds.pause)
         ds.pause--;
     if (!ds.pause) {
-        static constexpr const char* fmt = "\n"
-            "\tv_rms           = %.1fV\n"
-            "\ti_rms           = %.2fA\n"
-            "\tapparent_power  = %.1fVA\n"
-            "\treal_power      = %.1fW\n"
-            "\tenergy          = %.2fWh\n"
-            "\tpower_factor    = %.2f\n"
-            "\tfrequency       = %.2fHz\n"
-            "\tcpu0_load       = %.1f%%\n"
-            "\tcpu1_load       = %.1f%%\n"
-        //  "\tsample_shift    = %.1f\n"
-            "";
-        if (0 /*ds.counter % 5 == 0*/) {
-            char buf[1024];
-            snprintf(buf, sizeof(buf), fmt, m.f_v, m.f_i, m.f_va, m.f_w, m.f_wh, m.f_pf, m.f_hz, ds.cpu0, ds.cpu1/*, f_sh */);
-            ESP_LOGI(TAG, "%s", buf);
+        if (ds.counter % (uint32_t) (READINGS_PER_SECOND * m_settings.mqtt_period) == 0) {
+            if (xQueueSend(m_telemetry_queue, &m, 0) != pdPASS) {
+                ESP_LOGW(TAG, "Telemetry queue is full, dropping MqttMessage");
+            }
         }
+        //static constexpr const char* fmt = "\n"
+        //    "\tv_rms           = %.1fV\n"
+        //    "\ti_rms           = %.2fA\n"
+        //    "\tapparent_power  = %.1fVA\n"
+        //    "\treal_power      = %.1fW\n"
+        //    "\tenergy          = %.2fWh\n"
+        //    "\tpower_factor    = %.2f\n"
+        //    "\tfrequency       = %.2fHz\n"
+        //    "\tcpu0_load       = %.1f%%\n"
+        //    "\tcpu1_load       = %.1f%%\n"
+        //    "\tsample_shift    = %.1f\n"
+        //    "";
+        //if (0 /*ds.counter % 5 == 0*/) {
+        //    char buf[1024];
+        //    snprintf(buf, sizeof(buf), fmt, m.f_v, m.f_i, m.f_va, m.f_w, m.f_wh, m.f_pf, m.f_hz, ds.cpu0, ds.cpu1/*, f_sh */);
+        //    ESP_LOGI(TAG, "%s", buf);
+        //}
     }
 
     switch (ds.page) {
@@ -296,50 +340,46 @@ void PowerMeterApp::process_result(const ResultMessage& result)
             break;
         case MainsPage: {
             if (!ds.pause) {
-                ds.clear_lines(false);
-                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.0fV", m.f_v);
-                snprintf(ds.lines[1].data(), sizeof(display_line_t), "I_rms : %.2fA", m.f_i);
-                snprintf(ds.lines[2].data(), sizeof(display_line_t), "F_pwr : %.1fVA", m.f_va);
-                snprintf(ds.lines[3].data(), sizeof(display_line_t), "R_pwr : %.1fW", m.f_w);
-                snprintf(ds.lines[4].data(), sizeof(display_line_t), "Enrgy : %.2fWh", m.f_wh);
-                if (std::isnan(m.f_pf))
+                ds.clear_screen(false);
+                snprintf(ds.lines[0].data(), sizeof(display_line_t), "V_rms : %.1fV", m.power.f_v);
+                snprintf(ds.lines[1].data(), sizeof(display_line_t), "I_rms : %.2fA", m.power.f_i);
+                snprintf(ds.lines[2].data(), sizeof(display_line_t), "F_pwr : %.1fVA", m.power.f_va);
+                snprintf(ds.lines[3].data(), sizeof(display_line_t), "R_pwr : %.1fW", m.power.f_w);
+                snprintf(ds.lines[4].data(), sizeof(display_line_t), "Enrgy : %.1fWh", m.power.f_wh);
+                if (std::isnan(m.power.f_pf))
                     snprintf(ds.lines[5].data(), sizeof(display_line_t), "PF    : (n/a)");
                 else
-                    snprintf(ds.lines[5].data(), sizeof(display_line_t), "PF    : %.2f", m.f_pf);
-                if (std::isnan(m.f_hz))
+                    snprintf(ds.lines[5].data(), sizeof(display_line_t), "PF    : %.2f", m.power.f_pf);
+                if (std::isnan(m.power.f_hz))
                     snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : (n/a)");
                 else
-                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.2fHz", m.f_hz);
+                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.2fHz", m.power.f_hz);
                 ds.inverse[3] = ds.inverse[0] || ds.inverse[1];
                 ds.inverse[5] = ds.inverse[0] || ds.inverse[1];
             }
             break;
         }
         case DevicePage: {
-            if (!ds.pause) {
-                ds.clear_lines();
-                time_t utc_now = std::time(nullptr);
-                if (tm* local = std::localtime(&utc_now)) {
-                    strftime(ds.lines[0].data(), sizeof(display_line_t), "%H:%M:%S", local);
-                    strftime(ds.lines[1].data(), sizeof(display_line_t), "%a %d.%m.%Y", local);
-                }
-                uint32_t secs = (utc_now - s_start_time.tv_sec);
-                uint16_t days = secs / 86400;
-                uint16_t hours = secs / 3600;
-                uint16_t minutes = (secs % 3600) / 60;
-                size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-                size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-                if (days < 1000) {
-                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : %03hu.%02hu:%02hu", days, hours, minutes);
-                }
-                else {
-                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : ---.--:--");
-                }
-                snprintf(ds.lines[4].data(), sizeof(display_line_t), "Cpu0 : %4.1f%%", ds.cpu0);
-                snprintf(ds.lines[5].data(), sizeof(display_line_t), "Cpu1 : %4.1f%%", ds.cpu1);
-                snprintf(ds.lines[6].data(), sizeof(display_line_t), "Heap : %4uK", free_heap / 1024);
-                snprintf(ds.lines[7].data(), sizeof(display_line_t), "LBlk : %4uK", largest_block / 1024);
+            ds.clear_screen();
+            std::tm local {};
+            if (localtime_r(&m.time, &local)) {
+                strftime(ds.lines[0].data(), sizeof(display_line_t), "%H:%M:%S", &local);
+                strftime(ds.lines[1].data(), sizeof(display_line_t), "%a %d.%m.%Y", &local);
             }
+            uint32_t secs = ds.dev.uptime;
+            uint16_t days = secs / 86400;
+            uint16_t hours = secs / 3600;
+            uint16_t minutes = (secs % 3600) / 60;
+            if (days < 1000) {
+                snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : %03hu.%02hu:%02hu", days, hours, minutes);
+            }
+            else {
+                snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : ---.--:--");
+            }
+            snprintf(ds.lines[4].data(), sizeof(display_line_t), "Cpu0 : %4.1f%%", ds.dev.cpu0);
+            snprintf(ds.lines[5].data(), sizeof(display_line_t), "Cpu1 : %4.1f%%", ds.dev.cpu1);
+            snprintf(ds.lines[6].data(), sizeof(display_line_t), "Heap : %4uK", ds.dev.heap / 1024);
+            snprintf(ds.lines[7].data(), sizeof(display_line_t), "LBlk : %4uK", ds.dev.lblk / 1024);
             break;
         }
         case SettingsPage: {
@@ -349,32 +389,21 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                     switch (ds.input_state) {
                         case PageSelection:
                         case MenuSelection:
-                            snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID");
-                            snprintf(ds.lines[2].data(), sizeof(display_line_t), "2. Wi-Fi passw");
-                            snprintf(ds.lines[3].data(), sizeof(display_line_t), "3. Wi-Fi info");
-                            snprintf(ds.lines[4].data(), sizeof(display_line_t), "4. I noise flr");
-                            snprintf(ds.lines[5].data(), sizeof(display_line_t), "5. I calib");
-                            snprintf(ds.lines[6].data(), sizeof(display_line_t), "6. V calib");
+                            for (uint8_t i = 0; i < N_DISPLAYED_ITEMS; ++i)
+                                snprintf(ds.lines[i + 1].data(), sizeof(display_line_t), "%-16.16s", MENU_ITEMS[ds.first_displayed_menu_item + i]);
                             break;
                         case ItemDisplay:
+                            assert(ds.item_selected != ItemNone);
+                            snprintf(ds.lines[1].data(), sizeof(display_line_t), "%-16.16s", MENU_ITEMS[ds.item_selected]);
                             switch (ds.item_selected) {
-                                case ItemNone:
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "- none -");
-                                    break;
                                 case ItemWifiSsid: {
-                                    wifi_config_t wifi {};
-                                    esp_wifi_get_config(WIFI_IF_STA, &wifi);
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "1. Wi-Fi SSID:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", wifi.sta.ssid);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%-16.16s", m_settings.wifi_ssid.data());
                                     break;
                                 }
                                 case ItemWifiPassword: {
-                                    wifi_config_t wifi {};
-                                    esp_wifi_get_config(WIFI_IF_STA, &wifi);
                                     string_t pass {};
-                                    std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) wifi.sta.password)), '*');
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "2. Wi-Fi passw:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%.16s", pass.data());
+                                    std::fill_n(pass.begin(), std::min(sizeof(string_t), strlen((char*) m_settings.wifi_pass.data())), '*');
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%-16.16s", pass.data());
                                     break;
                                 }
                                 case ItemWifiInfo: {
@@ -384,7 +413,6 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                     esp_netif_ip_info_t ip_info {};
                                     esp_netif_get_ip_info(m_netif, &ip_info);
 
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. Wi-Fi info:");
                                     snprintf(ds.lines[2].data(), sizeof(display_line_t), "SSID:%.11s", wifi.sta.ssid);
                                     snprintf(ds.lines[3].data(), sizeof(display_line_t), "Channel:%d", wifi.sta.channel);
 
@@ -408,19 +436,58 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                     snprintf(ds.lines[7].data(), sizeof(display_line_t), "%d.%d.%d.%d", a, b, c, d);
                                     break;
                                 }
+                                case ItemMqttUri: {
+                                    if (strlen(m_settings.mqtt_uri.data()) == 0) {
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", "(empty)");
+                                    }
+                                    else for (int i = 0; i < 6; ++i) {
+                                        const char* part = m_settings.mqtt_uri.data() + (i * 16);
+                                        snprintf(ds.lines[i + 2].data(), sizeof(display_line_t), "%-16.16s", part);
+                                    }
+                                    break;
+                                }
+                                case ItemMqttCreds: {
+                                    if (strlen(m_settings.mqtt_creds.data()) == 0) {
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", "(empty)");
+                                    }
+                                    else for (int i = 0; i < 6; ++i) {
+                                        const char* part = m_settings.mqtt_creds.data() + (i * 16);
+                                        snprintf(ds.lines[i + 2].data(), sizeof(display_line_t), "%-16.16s", part);
+                                    }
+                                    break;
+                                }
+                                case ItemMqttTopic: {
+                                    if (strlen(m_settings.mqtt_topic.data()) == 0) {
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", "(empty)");
+                                    }
+                                    else for (int i = 0; i < 6; ++i) {
+                                        const char* part = m_settings.mqtt_topic.data() + (i * 16);
+                                        snprintf(ds.lines[i + 2].data(), sizeof(display_line_t), "%-16.16s", part);
+                                    }
+                                    break;
+                                }
+                                case ItemMqttPeriod: {
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f sec", m_settings.mqtt_period);
+                                    break;
+                                }
                                 case ItemINoiseFloor: {
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. I noise flr:");
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.i_noise_floor);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f A", m_settings.i_noise_floor);
                                     break;
                                 }
                                 case ItemICalib: {
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "4. I calibr:");
                                     snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.i_coef);
                                     break;
                                 }
                                 case ItemVCalib: {
-                                    snprintf(ds.lines[1].data(), sizeof(display_line_t), "3. V calibr:");
                                     snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.v_coef);
+                                    break;
+                                }
+                                case ItemVEnergySave: {
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f V", m_settings.v_acc_energy_save);
+                                    break;
+                                }
+                                case ItemResetEnrgy: {
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "Push to reset...");
                                     break;
                                 }
                                 default:
@@ -429,7 +496,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                             break;
                         case ValueInput:
                             snprintf(ds.lines[2].data(), sizeof(display_line_t), "Awaiting input");
-                            snprintf(ds.lines[3].data(), sizeof(display_line_t), " in console...");
+                            snprintf(ds.lines[3].data(), sizeof(display_line_t), "in console...");
                             break;
                         default:
                             break;
@@ -497,7 +564,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         }
         else if (ds.page == SettingsPage) {
             if (ds.input_state == MenuSelection) {
-                inverse = (i > 0) && (i == ds.item_selected);
+                inverse = (i > 0) && (i == ds.item_selected - ds.first_displayed_menu_item + 1);
             }
         }
         if (ds.with_display && ds.is_display_awake) {
@@ -520,7 +587,7 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     else {
                         ds.set_prev_page();
                     }
-                    ds.clear_lines();
+                    ds.clear_screen();
                     break;
                 case MenuSelection:
                     if (encoder.action == EncoderInputAction::Next) {
@@ -538,7 +605,7 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     else {
                         ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 9) % 10;
                     }
-                    ds.clear_lines();
+                    ds.clear_screen();
                     break;
                 default:
                     break;
@@ -554,8 +621,8 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             ESP_LOGI(TAG, "Resumed");
                         }
                         else {
-                            ds.pause = UINT32_MAX;
-                            ESP_LOGI(TAG, "Paused");
+                            ds.pause = READINGS_PER_SECOND * 10;
+                            ESP_LOGI(TAG, "Paused for 10 sec");
                         }
                     }
                     else if (ds.page == SettingsPage) {
@@ -568,7 +635,7 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             ds.pin_index = 0;
                             ds.pin_digits.fill(0);
                         }
-                        ds.clear_lines();
+                        ds.clear_screen();
                     }
                     break;
                 case PinInput:
@@ -588,40 +655,86 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             ESP_LOGW(TAG, "Invalid PIN entered.");
                         }
                     }
-                    ds.clear_lines();
+                    ds.clear_screen();
                     break;
                 case MenuSelection:
-                    ds.clear_lines();
+                    ds.clear_screen();
                     ds.input_state = ItemDisplay;
                     break;
                 case ItemDisplay:
-                    ds.clear_lines();
-                    ds.input_state = ValueInput;
+                    ds.clear_screen();
                     ds.pause = UINT32_MAX;
                     switch (ds.item_selected) {
                         case ItemWifiSsid: {
-                            string_t prompt { "Input new SSID:" };
+                            string_t prompt { "Input new Wi-Fi network name:" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, STRING_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
                             break;
                         }
                         case ItemWifiPassword: {
-                            string_t prompt { "Input new password:" };
+                            string_t prompt { "Input new Wi-Fi password:" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, STRING_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemWifiInfo: {
+                            ds.input_state = MenuSelection;
+                            ds.pause = 0;
+                            break;
+                        }
+                        case ItemMqttUri: {
+                            string_t prompt { "Input new MQTT broker URI:" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, STRING_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemMqttCreds: {
+                            string_t prompt { "Input new MQTT creds (use ':' as a separator, like \"username:password\")" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, STRING_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemMqttTopic: {
+                            string_t prompt { "Input new MQTT topic name:" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, STRING_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemMqttPeriod: {
+                            string_t prompt { "Input new MQTT period in seconds:" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
                             break;
                         }
                         case ItemINoiseFloor: {
                             string_t prompt { "Input new I noise floor:" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
                             break;
                         }
                         case ItemICalib: {
                             string_t prompt { "Input new I calibration:" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
                             break;
                         }
                         case ItemVCalib: {
                             string_t prompt { "Input new V calibration:" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemVEnergySave: {
+                            string_t prompt { "Input new V threshold to save acc energy counter in NVS:" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemResetEnrgy: {
+                            ESP_LOGI(TAG, "Accumulated energy counter was reset");
+                            SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy = 0.0f);
+                            ds.input_state = MenuSelection;
+                            ds.pause = 0;
                             break;
                         }
                         default:
@@ -642,22 +755,23 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     break;
                 case PinInput:
                     // Long press cancels PIN entry
-                    ds.clear_lines();
+                    ds.clear_screen();
                     ds.input_state = PageSelection;
                     break;
                 case MenuSelection:
-                    ds.clear_lines();
+                    ds.clear_screen();
                     ds.input_state = PageSelection;
                     ds.item_selected = ItemNone;
+                    ds.first_displayed_menu_item = 0;
                     break;
                 case ItemDisplay:
-                    ds.clear_lines();
+                    ds.clear_screen();
                     ds.input_state = MenuSelection;
-                    ds.pause = 0;
                     break;
                 case ValueInput:
-                    ds.clear_lines();
+                    ds.clear_screen();
                     ds.input_state = ItemDisplay;
+                    ds.pause = 0;
                     break;
             }
             break;
@@ -669,11 +783,18 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
     if (ds.input_state == ValueInput) {
         switch (input.action) {
             case ConsoleInputAction::Decimal:
-                ESP_LOGI(TAG, "Console input: %d", input.decimal_value);
-                ds.input_state = ItemDisplay;
                 break;
             case ConsoleInputAction::Float:
                 switch (ds.item_selected) {
+                    case ItemMqttPeriod:
+                        if (input.float_value < 1 || input.float_value > 255) {
+                            ESP_LOGW(TAG, "New MQTT period value is invalid ([1..255]): %f", input.float_value);
+                        }
+                        else {
+                            ESP_LOGI(TAG, "Setting new MQTT period: %f", input.float_value);
+                            SettingsManager::save(KEY_MQTT_PERIOD, m_settings.mqtt_period = input.float_value);
+                        }
+                        break;
                     case ItemINoiseFloor:
                         ESP_LOGI(TAG, "Setting new I noise floor: %f", input.float_value);
                         SettingsManager::save(KEY_I_NOISE_FLOOR, m_settings.i_noise_floor = input.float_value);
@@ -686,32 +807,42 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                         ESP_LOGW(TAG, "Setting new V calibration: %f", input.float_value);
                         SettingsManager::save(KEY_V_COEF, m_settings.v_coef = input.float_value);
                         break;
+                    case ItemVEnergySave:
+                        ESP_LOGW(TAG, "Setting new V threshold to save acc energy counter in NVS: %f", input.float_value);
+                        SettingsManager::save(KEY_V_ACC_ENERGY_SAVE, m_settings.v_acc_energy_save = input.float_value);
+                        break;
                     default:
                         break;
                 }
-                ds.input_state = ItemDisplay;
                 break;
             case ConsoleInputAction::String:
                 switch (ds.item_selected) {
                     case ItemWifiSsid:
                         set_wifi_ssid(input.string_value);
-                        ds.input_state = MenuSelection;
                         break;
                     case ItemWifiPassword:
                         set_wifi_pass(input.string_value);
-                        ds.input_state = MenuSelection;
+                        break;
+                    case ItemMqttUri:
+                        set_mqtt_uri(input.string_value);
+                        break;
+                    case ItemMqttCreds:
+                        set_mqtt_creds(input.string_value);
+                        break;
+                    case ItemMqttTopic:
+                        set_mqtt_topic(input.string_value);
                         break;
                     default:
-                        ds.input_state = ItemDisplay;
                         break;
                 }
                 break;
             case ConsoleInputAction::None:
                 ESP_LOGI(TAG, "Console input cancelled");
-                ds.input_state = ItemDisplay;
                 break;
         }
-        ds.clear_lines();
+        ds.input_state = ItemDisplay;
+        ds.pause = 0;
+        ds.clear_screen();
     }
 }
 
@@ -763,4 +894,12 @@ void PowerMeterApp::post_log(display_line_t message)
     if (xQueueSend(m_interface_queue, &qmsg, pdMS_TO_TICKS(100)) != pdPASS) {
         ESP_LOGW(TAG, "Interface queue is full, dropping LogMessage");
     }
+}
+
+void PowerMeterApp::get_device_metrics(MqttMessage& m)
+{
+    m_cpu_meter.get_load(m.device.cpu0, m.device.cpu1);
+    m.device.uptime = m.time - static_cast<timeval>(s_start_time).tv_sec;
+    m.device.heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    m.device.lblk = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 }
