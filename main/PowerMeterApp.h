@@ -44,9 +44,6 @@ const float MAX_EXPECTED_V_RMS = 270.0f;
 
 constexpr bool kDisposing = true;
 
-typedef std::array<char, 17> display_line_t;
-typedef std::array<char, 64> string_t;
-
 class PowerMeterApp
 {
 public:

@@ -197,7 +197,7 @@ void PowerMeterApp::compute_task()
 
                 // 800 samples at 4000Hz is exactly 0.2 seconds (0.00005556 hours)
                 const double CHUNK_TIME = (static_cast<double>(CHUNK_SIZE) / CALIBRATED_FREQ_HZ);
-                m_acc_energy_ws += m_real_power * CHUNK_TIME;
+                m_acc_energy += m_real_power * CHUNK_TIME;  // Yields watt-seconds
             }
 
             InterfaceTaskMessage qmsg {
@@ -207,7 +207,7 @@ void PowerMeterApp::compute_task()
                     .i_rms = m_i_rms,
                     .apparent_power = m_apparent_power,
                     .real_power = m_real_power,
-                    .energy = m_acc_energy_ws / 3600.0,
+                    .energy = m_acc_energy / 3600.0,        // Convert to watt-hours
                     //.cos_phi = m_cos_phi,
                     .frequency = m_frequency,
                     //.vi_shift = m_vi_sample_shift,

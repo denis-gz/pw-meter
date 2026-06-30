@@ -18,11 +18,11 @@ public:
 private:
     static std::once_flag s_isr_service_flag;
 
-    std::atomic_int m_counter;
-    std::atomic_int64_t m_sample_time;
-    std::atomic_int64_t m_depress_time;
-    std::atomic_int64_t m_release_time;
-    std::atomic_int m_level;
+    std::atomic_int m_counter {};
+    std::atomic_int64_t m_sample_time {};
+    std::atomic_int64_t m_depress_time {};
+    std::atomic_int64_t m_release_time {};
+    std::atomic_int m_level {};
 
     gpio_num_t m_pin = GPIO_NUM_NC;
     gpio_glitch_filter_handle_t gl_handle = {};

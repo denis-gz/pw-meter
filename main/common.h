@@ -1,6 +1,8 @@
 #pragma once
 
 #include "sdkconfig.h"
+#include <array>
+#include <cstddef>
 
 #define nameof(x) #x
 
@@ -21,3 +23,9 @@ F member_cast(R (T::*member_ptr)(Args...))
 
     return cast.f_ptr;
 }
+
+template<size_t size>
+using char_array_t = std::array<char, size>;
+
+typedef char_array_t<17>  display_line_t;
+typedef char_array_t<256> string_t;
