@@ -6,9 +6,10 @@
 	(paper "A4")
 	(title_block
 		(title "PW Meter")
-		(date "2026-04-14")
-		(rev "1")
+		(date "2026-06-17")
+		(rev "1.3")
 		(company "SAG Enterprises")
+		(comment 1 "Copyright © Denys Zavorotnyi, 2026")
 	)
 	(lib_symbols
 		(symbol "Connector:Conn_01x03_Pin"
