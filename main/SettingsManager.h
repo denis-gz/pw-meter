@@ -18,6 +18,7 @@ constexpr const char* KEY_MQTT_CREDS = "mqtt_creds";
 constexpr const char* KEY_MQTT_TOPIC = "mqtt_topic";
 constexpr const char* KEY_MQTT_PERIOD = "mqtt_period";
 constexpr const char* KEY_I_NOISE_FLOOR = "i_noise_floor";
+constexpr const char* KEY_V_NOISE_FLOOR = "v_noise_floor";
 constexpr const char* KEY_I_COEF = "i_coef";
 constexpr const char* KEY_V_COEF = "v_coef";
 constexpr const char* KEY_V_ACC_ENERGY_SAVE = "v_acc_energy_save";
@@ -26,6 +27,7 @@ constexpr const char* KEY_ACC_ENERGY = "acc_energy";
 struct DeviceSettings
 {
     static constexpr const float I_NOISE_FLOOR = 0.10f;         // 100 mA
+    static constexpr const float V_NOISE_FLOOR = 5.0f;          // 5 V
     static constexpr const float I_COEF = 0.02699f;
     static constexpr const float V_COEF = 0.48565f;
     static constexpr const float V_ACC_ENERGY_SAVE = 100.0f;    // 100 V
@@ -36,9 +38,10 @@ struct DeviceSettings
     char_array_t<MAX_URI_LEN_Z>   mqtt_uri {};
     char_array_t<MAX_CREDS_LEN_Z> mqtt_creds {};                // Use ':' char as a separator, like "user:pass"
     char_array_t<MAX_TOPIC_LEN_Z> mqtt_topic {};
-    
+
     float mqtt_period = MQTT_PERIOD;
     float i_noise_floor = I_NOISE_FLOOR;
+    float v_noise_floor = V_NOISE_FLOOR;
     float i_coef = I_COEF;
     float v_coef = V_COEF;
     float v_acc_energy_save = V_ACC_ENERGY_SAVE;

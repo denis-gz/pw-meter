@@ -50,6 +50,7 @@ void SettingsManager::load(DeviceSettings& settings)
 
     nvs_get_u32(handle, KEY_MQTT_PERIOD, reinterpret_cast<uint32_t*>(&settings.mqtt_period));
     nvs_get_u32(handle, KEY_I_NOISE_FLOOR, reinterpret_cast<uint32_t*>(&settings.i_noise_floor));
+    nvs_get_u32(handle, KEY_V_NOISE_FLOOR, reinterpret_cast<uint32_t*>(&settings.v_noise_floor));
     nvs_get_u32(handle, KEY_I_COEF, reinterpret_cast<uint32_t*>(&settings.i_coef));
     nvs_get_u32(handle, KEY_V_COEF, reinterpret_cast<uint32_t*>(&settings.v_coef));
     nvs_get_u32(handle, KEY_V_ACC_ENERGY_SAVE, reinterpret_cast<uint32_t*>(&settings.v_acc_energy_save));

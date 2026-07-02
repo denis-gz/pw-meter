@@ -42,6 +42,7 @@ enum MenuItem {
     ItemMqttPeriod,
     ItemINoiseFloor,
     ItemICalib,
+    ItemVNoiseFloor,
     ItemVCalib,
     ItemVEnergySave,
     ItemResetEnrgy,
@@ -62,9 +63,10 @@ static constexpr const char MENU_ITEMS[ItemCount][16] {
     { "7. MQTT period" },
     { "8. I noise flr" },
     { "9. I calib" },
-    { "10. V calib" },
-    { "11. V nrgy save" },
-    { "12. Reset enrgy" }
+    { "10. V noise flr" },
+    { "11. V calib" },
+    { "12. V nrgy save" },
+    { "13. Reset enrgy" }
 };
 
 struct DisplayContext
@@ -266,7 +268,9 @@ void PowerMeterApp::process_result(const ResultMessage& result)
 {
     MqttMessage m {};
     m.time = std::time(0);
-    m.power.f_v = ds.filter_v.process(result.v_rms, &ds.inverse[0]);
+    m.power.f_v = (result.v_rms == 0.0f)
+        ? (ds.filter_v.reset(), ds.inverse[0] = false, 0.0f)
+        : ds.filter_v.process(result.v_rms, &ds.inverse[0]);
     m.power.f_i = (result.i_rms == 0.0f)
         ? (ds.filter_i.reset(), ds.inverse[1] = false, 0.0f)
         : ds.filter_i.process(result.i_rms, &ds.inverse[1]);
@@ -274,7 +278,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     m.power.f_w = (result.real_power == 0.0f)
         ? (ds.filter_w.reset(), ds.inverse[2] = false, 0.0f)
         : ds.filter_w.process(result.real_power, &ds.inverse[2]);
-    m.power.f_hz = (m.power.f_v < 10)
+    m.power.f_hz = std::isnan(result.frequency)
         ? (ds.filter_hz.reset(), ds.inverse[6] = false, NAN)
         : ds.filter_hz.process(result.frequency, &ds.inverse[6]);
     //float f_cos = filter_pf.process(result.cos_phi);
@@ -476,6 +480,10 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 }
                                 case ItemICalib: {
                                     snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f", m_settings.i_coef);
+                                    break;
+                                }
+                                case ItemVNoiseFloor: {
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f V", m_settings.v_noise_floor);
                                     break;
                                 }
                                 case ItemVCalib: {
@@ -707,13 +715,19 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             break;
                         }
                         case ItemINoiseFloor: {
-                            string_t prompt { "Input new I noise floor:" };
+                            string_t prompt { "Input new I noise floor (A):" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
                             ds.input_state = ValueInput;
                             break;
                         }
                         case ItemICalib: {
                             string_t prompt { "Input new I calibration:" };
+                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
+                            ds.input_state = ValueInput;
+                            break;
+                        }
+                        case ItemVNoiseFloor: {
+                            string_t prompt { "Input new V noise floor (V):" };
                             esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
                             ds.input_state = ValueInput;
                             break;
@@ -796,19 +810,23 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                         }
                         break;
                     case ItemINoiseFloor:
-                        ESP_LOGI(TAG, "Setting new I noise floor: %f", input.float_value);
+                        ESP_LOGI(TAG, "Setting new I noise floor: %f A", input.float_value);
                         SettingsManager::save(KEY_I_NOISE_FLOOR, m_settings.i_noise_floor = input.float_value);
                         break;
                     case ItemICalib:
                         ESP_LOGW(TAG, "Setting new I calibration: %f", input.float_value);
                         SettingsManager::save(KEY_I_COEF, m_settings.i_coef = input.float_value);
                         break;
+                    case ItemVNoiseFloor:
+                        ESP_LOGI(TAG, "Setting new V noise floor: %f V", input.float_value);
+                        SettingsManager::save(KEY_V_NOISE_FLOOR, m_settings.v_noise_floor = input.float_value);
+                        break;
                     case ItemVCalib:
                         ESP_LOGW(TAG, "Setting new V calibration: %f", input.float_value);
                         SettingsManager::save(KEY_V_COEF, m_settings.v_coef = input.float_value);
                         break;
                     case ItemVEnergySave:
-                        ESP_LOGW(TAG, "Setting new V threshold to save acc energy counter in NVS: %f", input.float_value);
+                        ESP_LOGW(TAG, "Setting new V threshold to save acc energy counter in NVS: %f V", input.float_value);
                         SettingsManager::save(KEY_V_ACC_ENERGY_SAVE, m_settings.v_acc_energy_save = input.float_value);
                         break;
                     default:

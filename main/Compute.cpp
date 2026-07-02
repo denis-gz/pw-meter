@@ -180,8 +180,15 @@ void PowerMeterApp::compute_task()
             m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * m_settings.v_coef;
             m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * m_settings.i_coef;
 
+            if (m_v_rms < m_settings.v_noise_floor) {
+                m_v_rms = 0.0f;
+                m_frequency = NAN;
+            }
             if (m_i_rms < m_settings.i_noise_floor) {
                 m_i_rms = 0.0f;
+            }
+
+            if (m_v_rms == 0.0f || m_i_rms == 0.0f) {
                 m_apparent_power = 0.0f;
                 m_real_power = 0.0f;
                 //m_cos_phi = NAN;
