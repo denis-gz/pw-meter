@@ -71,13 +71,11 @@ static constexpr const char MENU_ITEMS[ItemCount][16] {
 
 struct DisplayContext
 {
-    using Filter = AdaptiveDisplayFilter;
-
-    Filter filter_v { 20 };
-    Filter filter_i { 0.5 };
-    Filter filter_w { 10 };
+    AdaptiveDisplayFilter filter_v { 20 };
+    AdaptiveDisplayFilter filter_i { 0.5 };
+    AdaptiveDisplayFilter filter_w { 10 };
     // Filter filter_pf{ 0.1 };
-    Filter filter_hz{ 0.1 };
+    MedianEMAFilter filter_hz{ 0.25 };
     // Filter filter_sh{ 0.3 };
 
     bool with_display = false;

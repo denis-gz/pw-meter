@@ -2,6 +2,8 @@
 
 #include <esp_log.h>
 #include <esp_dsp.h>
+#include <algorithm>
+#include <array>
 
 #include "common.h"
 
@@ -98,48 +100,74 @@ void PowerMeterApp::compute_task()
             // Save the last 4 samples of the new chunk for the next reading
             memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT], LM_COARS_SAMPLES_SHIFT * sizeof(float));
 
-            // --- CALCULATE THE GRID FREQUENCY ---
+            // Read the dynamically measured ADC sampling rate per channel
+            const float current_fs_hz = m_actual_sample_freq_hz.load(std::memory_order_relaxed);
 
-            float v_first_crossing_index = NAN;
-            float v_last_crossing_index = NAN;
-            int v_cycle_count = 0;
+            // --- CALCULATE THE GRID FREQUENCY (15 Hz .. 65 Hz) ---
 
-            // Software Schmitt Trigger state
+            const float HYSTERESIS_THRESHOLD = DeviceSettings::V_HYSTERESIS / m_settings.v_coef;
+
+            // Broad hardware bounds: 15.0 Hz (~266.7 samples) to 65.0 Hz (~61.5 samples)
+            const float MIN_FREQ_HZ = 15.0f;
+            const float MAX_FREQ_HZ = 65.0f;
+            const float MIN_VALID_PERIOD = current_fs_hz / MAX_FREQ_HZ; // ~61.5 samples
+            const float MAX_VALID_PERIOD = current_fs_hz / MIN_FREQ_HZ; // ~266.7 samples
+
+            // Deadtime lockout: ~75% of the minimum period at 65 Hz (~45 samples / 11.2 ms)
+            const int DEADTIME_SAMPLES = static_cast<int>(MIN_VALID_PERIOD * 0.75f);
+
             bool is_positive_half = (aligned_v_array[0] > 0.0f);
-            const float HYSTERESIS_THRESHOLD = 30.0f;
-
-            // Track the index of the last valid cycle to enforce Deadtime
             int last_rising_edge_index = -100;
+            int last_negative_index = (aligned_v_array[0] <= 0.0f) ? 0 : -1;
 
-            // Iterate through the voltage array to find rising edges
+            float prev_crossing_index = NAN;
+            int first_crossing_sample = -1;
+            int last_crossing_sample = -1;
+
+            // At up to 65 Hz in an 800-sample chunk, there can be at most 13 cycles
+            std::array<float, 16> cycle_periods {};
+            size_t cycle_periods_count = 0;
+
             for (int i = 1; i < CHUNK_SIZE; i++) {
+                // Track the latest sample <= 0 before the positive hysteresis threshold is crossed
+                if (!is_positive_half && aligned_v_array[i] <= 0.0f) {
+                    last_negative_index = i;
+                }
 
                 // Signal must securely exceed the positive threshold to register a cycle
                 if (!is_positive_half && aligned_v_array[i] > HYSTERESIS_THRESHOLD) {
                     is_positive_half = true;
 
-                    // The 50-sample deadtime Lockout
-                    if (i - last_rising_edge_index > 50) {
+                    if (i - last_rising_edge_index > DEADTIME_SAMPLES && last_negative_index >= 0) {
                         last_rising_edge_index = i;
 
-                        // Trace backwards to find the exact zero-crossing points
-                        int z = i;
-                        while (z > 0 && aligned_v_array[z] > 0.0f) {
-                            z--;
+                        // Advance from last_negative_index to find the exact sample pair straddling 0V
+                        int z = last_negative_index;
+                        while (z + 1 < i && aligned_v_array[z + 1] <= 0.0f) {
+                            z++;
                         }
 
-                        // Now, z is the index just before 0, and z+1 is just after 0.
                         // Calculate the exact sub-sample fractional index of the crossing
-                        float fraction = (0.0f - aligned_v_array[z]) / (aligned_v_array[z+1] - aligned_v_array[z]);
-                        float exact_index = (float)z + fraction;
+                        const float denom = aligned_v_array[z + 1] - aligned_v_array[z];
+                        const float fraction = (denom > 1e-3f) ? (-aligned_v_array[z] / denom) : 0.0f;
+                        const float exact_index = static_cast<float>(z) + fraction;
 
-                        if (v_cycle_count == 0) {
-                            v_first_crossing_index = exact_index;
+                        if (first_crossing_sample < 0) {
+                            first_crossing_sample = z;
                         }
-                        else {
-                            v_last_crossing_index = exact_index;
+                        last_crossing_sample = z;
+
+                        if (!std::isnan(prev_crossing_index)) {
+                            const float period_samples = exact_index - prev_crossing_index;
+
+                            // Stage 1: Validate broad physical bounds [15 Hz .. 65 Hz]
+                            if (period_samples >= MIN_VALID_PERIOD &&
+                                period_samples <= MAX_VALID_PERIOD &&
+                                cycle_periods_count < cycle_periods.size()) {
+                                cycle_periods[cycle_periods_count++] = period_samples;
+                            }
                         }
-                        v_cycle_count++;
+                        prev_crossing_index = exact_index;
                     }
                 }
                 // Signal must securely fall below the negative threshold to arm for the next cycle
@@ -148,37 +176,55 @@ void PowerMeterApp::compute_task()
                 }
             }
 
-            // We need at least 2 crossings to measure the time of 1 full cycle
-            if (v_cycle_count >= 2) {
-                const int total_full_cycles_measured = v_cycle_count - 1;
-                const float delta_index = v_last_crossing_index - v_first_crossing_index;
+            if (cycle_periods_count > 0) {
+                // Stage 2: Find median period in this chunk and average only inliers (within +/- 3% of median)
+                // This rejects single-cycle zero-crossing glitches at ANY operating frequency (15..65 Hz)
+                std::array<float, 16> sorted = cycle_periods;
+                std::sort(sorted.begin(), sorted.begin() + cycle_periods_count);
+                const float median_period = sorted[cycle_periods_count / 2];
+                const float tolerance = median_period * 0.03f;
 
-                // Frequency = (Cycles / Samples) * Sampling_Rate
-                m_frequency = (total_full_cycles_measured / delta_index) * CALIBRATED_FREQ_HZ;
+                double inlier_sum = 0.0;
+                int inlier_count = 0;
 
-                // If the calculated frequency jumps above 52 Hz, dump the chunk to the console!
-                if (m_frequency > 52.0f) {
-                    ESP_LOGE(TAG, "ANOMALY DETECTED! Frequency calculated as: %f Hz", m_frequency);
-                    ESP_LOGE(TAG, "Cycle Count: %d, First Crossing: %f, Last Crossing: %f", v_cycle_count, v_first_crossing_index, v_last_crossing_index);
+                for (size_t k = 0; k < cycle_periods_count; ++k) {
+                    if (std::abs(cycle_periods[k] - median_period) <= tolerance) {
+                        inlier_sum += cycle_periods[k];
+                        inlier_count++;
+                    }
+                }
 
-                    //printf("--- START CHUNK DUMP ---\n");
-                    //for (int i = 0; i < CHUNK_SIZE; i++) {
-                    //    printf("%f\n", aligned_v_array[i]);
-                    //}
-                    //printf("--- END CHUNK DUMP ---\n");
+                if (inlier_count > 0) {
+                    const double avg_period_samples = inlier_sum / inlier_count;
+                    m_frequency = static_cast<float>(current_fs_hz / avg_period_samples);
                 }
             }
-            // ------------------------------------
+            else {
+                m_frequency = NAN;
+            }
+            // -----------------------------------------------------
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
+            // Use cycle-synchronized window [first_crossing_sample .. last_crossing_sample)
+            // if we have at least 1 valid full cycle, so V_rms, I_rms, and Power don't wobble off-50Hz.
+            int dsp_start_idx = 0;
+            int dsp_sample_count = CHUNK_SIZE;
+
+            if (cycle_periods_count >= 1 &&
+                first_crossing_sample >= 0 &&
+                last_crossing_sample > first_crossing_sample) {
+                dsp_start_idx = first_crossing_sample;
+                dsp_sample_count = last_crossing_sample - first_crossing_sample;
+            }
+
             float v_sq_sum = 0;
             float i_sq_sum = 0;
 
-            dsps_dotprod_f32(aligned_v_array, aligned_v_array, &v_sq_sum, CHUNK_SIZE);
-            dsps_dotprod_f32(i_array, i_array, &i_sq_sum, CHUNK_SIZE);
+            dsps_dotprod_f32(&aligned_v_array[dsp_start_idx], &aligned_v_array[dsp_start_idx], &v_sq_sum, dsp_sample_count);
+            dsps_dotprod_f32(&i_array[dsp_start_idx], &i_array[dsp_start_idx], &i_sq_sum, dsp_sample_count);
 
-            m_v_rms = sqrt(v_sq_sum / CHUNK_SIZE) * m_settings.v_coef;
-            m_i_rms = sqrt(i_sq_sum / CHUNK_SIZE) * m_settings.i_coef;
+            m_v_rms = sqrt(v_sq_sum / dsp_sample_count) * m_settings.v_coef;
+            m_i_rms = sqrt(i_sq_sum / dsp_sample_count) * m_settings.i_coef;
 
             if (m_v_rms < m_settings.v_noise_floor) {
                 m_v_rms = 0.0f;
@@ -197,14 +243,14 @@ void PowerMeterApp::compute_task()
                 m_apparent_power = m_v_rms * m_i_rms;               // VA
 
                 float real_pwr = 0;
-                dsps_dotprod_f32(aligned_v_array, i_array, &real_pwr, CHUNK_SIZE);
-                real_pwr /= CHUNK_SIZE;
+                dsps_dotprod_f32(&aligned_v_array[dsp_start_idx], &i_array[dsp_start_idx], &real_pwr, dsp_sample_count);
+                real_pwr /= dsp_sample_count;
                 real_pwr *= m_settings.v_coef * m_settings.i_coef;  // Watts
                 m_real_power = real_pwr;
 
-                // 800 samples at 4000Hz is exactly 0.2 seconds (0.00005556 hours)
-                const double CHUNK_TIME = (static_cast<double>(CHUNK_SIZE) / CALIBRATED_FREQ_HZ);
-                m_acc_energy += m_real_power * CHUNK_TIME;  // Yields watt-seconds
+                // Integrate energy over the full 800-sample chunk duration (~0.2 s) using the clean cycle-locked power
+                const double CHUNK_TIME = static_cast<double>(CHUNK_SIZE) / static_cast<double>(current_fs_hz);
+                m_acc_energy += m_real_power * CHUNK_TIME;          // Yields watt-seconds
             }
 
             InterfaceTaskMessage qmsg {

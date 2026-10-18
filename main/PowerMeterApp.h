@@ -228,6 +228,7 @@ private:
     //volatile uint32_t m_phase_shift = 0;
     // *****
 
+    std::atomic<float> m_actual_sample_freq_hz { CALIBRATED_FREQ_HZ };
     std::atomic<double> m_acc_energy {};
     std::atomic_bool m_acc_energy_saved {};
     std::atomic_bool m_stop_tasks {};

@@ -30,6 +30,7 @@ struct DeviceSettings
     static constexpr const float V_NOISE_FLOOR = 5.0f;          // 5 V
     static constexpr const float I_COEF = 0.02699f;
     static constexpr const float V_COEF = 0.48565f;
+    static constexpr const float V_HYSTERESIS = 15.0f;          // 15 V
     static constexpr const float V_ACC_ENERGY_SAVE = 100.0f;    // 100 V
     static constexpr const float MQTT_PERIOD = 1.0f;            // 1 sec
 

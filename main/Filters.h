@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <algorithm>
 
 
 class EMAFilter
@@ -94,63 +95,57 @@ public:
     }
 };
 
-/*
-template<size_t SIZE>
-class AdaptiveSMAFilter
+
+class MedianEMAFilter
 {
 private:
-    float current_value;
-    float sigma_threshold;
-
-    float sum;
-    std::array<float, SIZE> samples;
-    size_t last_index;
+    std::array<float, 5> window {};
+    size_t count = 0;
+    size_t index = 0;
+    float smoothed_value = NAN;
+    float alpha;
 
 public:
-    // Initialize with NAN. Default to a 20-sigma jump threshold.
-    AdaptiveSMAFilter(float sigma_limit = 20.0f) {
-        sigma_threshold = sigma_limit;
-        current_value = NAN;
-        last_index = 0;
-        sum = 0;
+    MedianEMAFilter(float alpha_val = 0.25f) : alpha(alpha_val) {}
+
+    float process(float new_reading, int* rapid_change = nullptr) {
+        if (std::isnan(new_reading)) {
+            return smoothed_value;
+        }
+
+        // 1. Push into 5-point ring buffer (1 second of 200ms chunks)
+        window[index] = new_reading;
+        index = (index + 1) % window.size();
+        if (count < window.size()) {
+            count++;
+        }
+
+        // 2. Find median to completely strip 1- or 2-chunk spikes
+        std::array<float, 5> sorted = window;
+        std::sort(sorted.begin(), sorted.begin() + count);
+        float median = sorted[count / 2];
+
+        // 3. Apply EMA smoothing on the spike-free median
+        if (std::isnan(smoothed_value)) {
+            smoothed_value = median;
+        } else {
+            smoothed_value = smoothed_value + alpha * (median - smoothed_value);
+        }
+
+        if (rapid_change) {
+            *rapid_change = 0;
+        }
+        return smoothed_value;
     }
 
-    float process(float new_reading) {
-
-        samples[last_index % SIZE] = new_reading;
-        int old_sample = samples[++last_index % SIZE];
-        float count = last_index < SIZE ? last_index : SIZE;
-
-        // Calculate mean (average)
-        sum += new_reading;
-        float avg = sum / count;
-        sum -= old_sample;
-
-        // Calculate standard deviation
-        float sigma = 0;
-        if (count > 1) {
-            for (int j = 0; j < count; ++j) {
-                float s = samples[j] - avg;
-                sigma += s * s;
-            }
-            sigma = std::sqrt(sigma / (count - 1));
-        }
-
-        // Detect signal change, reset filter
-        if (sigma > sigma_threshold && last_index > 3) {
-            avg = new_reading;
-            samples.fill(0);
-            sum = 0;
-            last_index = 0;
-        }
-
-        current_value = avg;
-
-        return current_value;
+    void reset() {
+        count = 0;
+        index = 0;
+        smoothed_value = NAN;
     }
 
     float get() const {
-        return current_value;
+        return smoothed_value;
     }
 };
-*/
+

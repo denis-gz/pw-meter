@@ -1,8 +1,10 @@
 .qtcreator/
 
 build/
+build-*/
 managed_components/
 docs/gem/
+docs/flow/
 
 /sdkconfig.old
 
