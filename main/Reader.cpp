@@ -1,7 +1,5 @@
 #include "PowerMeterApp.h"
 
-#include <esp_timer.h>
-
 void PowerMeterApp::setup_reader(bool disposing)
 {
     if (disposing) {
@@ -85,91 +83,57 @@ void PowerMeterApp::reader_task()
 
     setup_reader();
 
-    // State variables for dynamic ADC DMA sampling frequency measurement
-    int64_t calib_start_time_us = 0;
-    uint32_t calib_v_samples_acc = 0;
-    float smoothed_fs = CALIBRATED_FREQ_HZ;
-    bool fs_initialized = false;
+    // Last good value per channel, substituted for invalid samples
+    float last_v_mv = 0;
+    float last_i_mv = 0;
+    // The pattern is V, I, V, I...: tells which channel an invalid sample belongs to
+    bool expect_v = true;
 
     while (!m_stop_tasks) {
         // Block and wait for a chunk of data from DMA
         esp_err_t ret = adc_continuous_read_parse(m_adc, parsed_buf, SAMPLES_TO_READ, &samples_count, portMAX_DELAY);
         if (ret == ESP_OK) {
-            // Capture hardware timer timestamp (1 us resolution, backed by 40 MHz XTAL)
-            const int64_t now_us = esp_timer_get_time();
+            int invalid_count = 0;
 
-            bool v_overflow_warning_printed = false;
-            bool i_overflow_warning_printed = false;
-            bool frame_valid = true;
-            uint32_t v_samples_in_frame = 0;
+            auto push_v = [&](float mv) {
+                expect_v = false;
+                m_v_ring_buffer.push(mv);
+            };
+            auto push_i = [&](float mv) {
+                expect_v = true;
+                m_i_ring_buffer.push(mv);
+            };
 
             // Parse the raw ESP32-S3 data into clean millivolt values
             for (int i = 0; i < samples_count; ++i) {
                 if (!parsed_buf[i].valid) {
-                    m_v_ring_buffer.reset();
-                    m_i_ring_buffer.reset();
-                    frame_valid = false;
-                    calib_start_time_us = 0;
-                    calib_v_samples_acc = 0;
-                    ESP_LOGW(TAG, "Bad ADC sample encountered! The frame is dropped and buffers are reset.");
-                    break;
+                    invalid_count++;
+                    if (expect_v)
+                        push_v(last_v_mv);
+                    else
+                        push_i(last_i_mv);
+                    continue;
                 }
                 if (parsed_buf[i].channel == m_adc_v_channel_id) {
-                    v_samples_in_frame++;
+                    // The preceding I sample went missing
+                    if (!expect_v)
+                        push_i(last_i_mv);
                     int calibrated_mv = 0;
                     adc_cali_raw_to_voltage(m_adc_v_cali, parsed_buf[i].raw_data, &calibrated_mv);
-                    if (!m_v_ring_buffer.push(calibrated_mv)) {
-                        if (!v_overflow_warning_printed) {
-                            ESP_LOGW(TAG, "V-Buffer Overflow! Samples are being dropped.");
-                            v_overflow_warning_printed = true;
-                        }
-                    }
+                    push_v(last_v_mv = calibrated_mv);
                 }
                 else if (parsed_buf[i].channel == m_adc_i_channel_id) {
+                    // The preceding V sample went missing
+                    if (expect_v)
+                        push_v(last_v_mv);
                     int calibrated_mv = 0;
                     adc_cali_raw_to_voltage(m_adc_i_cali, parsed_buf[i].raw_data, &calibrated_mv);
-                    if (!m_i_ring_buffer.push(calibrated_mv)) {
-                        if (!i_overflow_warning_printed) {
-                            ESP_LOGW(TAG, "I-Buffer Overflow! Samples are being dropped.");
-                            i_overflow_warning_printed = true;
-                        }
-                    }
+                    push_i(last_i_mv = calibrated_mv);
                 }
             }
 
-            // Dynamically measure actual per-channel ADC sampling rate
-            if (frame_valid) {
-                if (calib_start_time_us == 0) {
-                    calib_start_time_us = now_us;
-                    calib_v_samples_acc = 0;
-                }
-                else {
-                    calib_v_samples_acc += v_samples_in_frame;
-                    const int64_t elapsed_us = now_us - calib_start_time_us;
-
-                    // Evaluate every ~2 seconds (2,000,000 us) to minimize FreeRTOS scheduling jitter
-                    if (elapsed_us >= 2000000) {
-                        const float measured_fs = (calib_v_samples_acc * 1000000.0) / elapsed_us;
-
-                        // Sanity check: accept only values within +/-5% of nominal 4000 Hz
-                        if (measured_fs > 3800.0f && measured_fs < 4200.0f) {
-                            if (!fs_initialized) {
-                                smoothed_fs = measured_fs;
-                                fs_initialized = true;
-                                ESP_LOGI(TAG, "Initial measured ADC freq: %.2f Hz", smoothed_fs);
-                            }
-                            else {
-                                // Smooth out task wakeup jitter with a slow EMA filter (alpha = 0.1)
-                                smoothed_fs = smoothed_fs + 0.1f * (measured_fs - smoothed_fs);
-                            }
-                            m_actual_sample_freq_hz.store(smoothed_fs, std::memory_order_relaxed);
-                        }
-
-                        // Start the next 2-second measurement window from the current timestamp
-                        calib_start_time_us = now_us;
-                        calib_v_samples_acc = 0;
-                    }
-                }
+            if (invalid_count) {
+                ESP_LOGW(TAG, "%d invalid ADC sample(s) replaced with last good values", invalid_count);
             }
 
             if (m_compute_task)

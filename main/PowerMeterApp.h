@@ -5,6 +5,8 @@
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <mqtt_client.h>
+#include <hal/adc_ll.h>
+#include <soc/soc.h>
 #include <cmath>
 
 #include "common.h"
@@ -22,8 +24,12 @@
 
 // 4000 Hz per channel * 2 channels = 8000 Hz total sampling frequency
 #define SAMPLE_FREQ_HZ     8000
-#define CHANNEL_FREQ_HZ    4000.0
-#define CALIBRATED_FREQ_HZ 4006.0
+
+// Actual rate per channel, mirrors adc_hal_digi_sample_freq_config(): 80 MHz APB / 16 = 5 MHz,
+// trigger interval truncated to whole cycles (312.5 -> 312), giving 4006.41 Hz instead of 4000
+constexpr uint32_t ADC_CLKM_DIV = (ADC_LL_CLKM_DIV_NUM_DEFAULT + 1) * ADC_LL_CLKM_DIV_B_DEFAULT + ADC_LL_CLKM_DIV_A_DEFAULT;
+constexpr uint32_t ADC_TRIGGER_INTERVAL = APB_CLK_FREQ / (ADC_CLKM_DIV * 2 * SAMPLE_FREQ_HZ);
+constexpr double CHANNEL_FREQ_HZ = double(APB_CLK_FREQ) / ADC_CLKM_DIV / (2 * ADC_TRIGGER_INTERVAL) / 2;
 
 // We want to process exactly 10 AC cycles (at 50Hz and 4000 sampling rate)
 const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
@@ -33,11 +39,8 @@ const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
 const size_t SAMPLES_TO_READ = CHUNK_SIZE * 2;
 const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
 
-// The coarse estimation of sampling shift introduced by the LM358 op-amp on V channel (samples)
-#define LM_COARS_SAMPLES_SHIFT  (4)
-
-// Actual sub-fraction sampling shift (measured samples)
-#define LM_FINE_SAMPLES_SHIFT   (4.35f)
+// Sampling shift between V and I channels introduced by the LM358 op-amp (measured samples)
+#define LM_SAMPLES_SHIFT (4.60f)
 
 // Define the absolute maximum real-world voltage before considering it a glitch
 const float MAX_EXPECTED_V_RMS = 270.0f;
@@ -226,7 +229,6 @@ private:
     //volatile uint32_t m_phase_shift = 0;
     // *****
 
-    std::atomic<float> m_actual_sample_freq_hz { CALIBRATED_FREQ_HZ };
     std::atomic<double> m_acc_energy {};
     std::atomic_bool m_acc_energy_saved {};
     std::atomic_bool m_stop_tasks {};

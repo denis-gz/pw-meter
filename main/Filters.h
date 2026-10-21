@@ -149,3 +149,28 @@ public:
     }
 };
 
+
+// Rounds to a step, but moves to a new step only when the input crosses
+// the rounding boundary by a margin: no last-digit flicker
+class HysteresisQuantizer
+{
+private:
+    float step;
+    float threshold;
+    float output = NAN;
+
+public:
+    HysteresisQuantizer(float step_val, float margin = 0.3f)
+        : step(step_val), threshold(step_val * (0.5f + margin)) {}
+
+    float process(float value) {
+        if (std::isnan(output) || std::abs(value - output) > threshold)
+            output = std::round(value / step) * step;
+        return output;
+    }
+
+    void reset() {
+        output = NAN;
+    }
+};
+

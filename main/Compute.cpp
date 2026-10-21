@@ -9,6 +9,11 @@
 
 #include "common.h"
 
+// V/I alignment: V is delayed by whole samples only (values stay intact),
+// the remaining fraction is applied to I using linear interpolation
+constexpr int V_SHIFT_SAMPLES = static_cast<int>(LM_SAMPLES_SHIFT) + 1;
+constexpr float I_SHIFT_FRAC = V_SHIFT_SAMPLES - LM_SAMPLES_SHIFT;
+
 void PowerMeterApp::compute_task()
 {
     ESP_LOGI(TAG, "compute_task: started");
@@ -17,10 +22,12 @@ void PowerMeterApp::compute_task()
     auto v_array = new float[CHUNK_SIZE];
     auto i_array = new float[CHUNK_SIZE];
     auto aligned_v_array = new float[CHUNK_SIZE];
+    auto aligned_i_array = new float[CHUNK_SIZE];
 
-    // This is used to save the last 4 samples of the previous chunk since the current
-    // goes ahead of voltage due to LM358 signal processing delay
-    float prev_v_history[LM_COARS_SAMPLES_SHIFT] {};
+    // Tails of the previous chunk, since the current goes ahead of voltage
+    // due to LM358 signal processing delay
+    float prev_v_history[V_SHIFT_SAMPLES] {};
+    float prev_i_last = 0;
 
     // Track exact wall-clock time for zero-drift energy accumulation
     int64_t last_energy_update_us = 0;
@@ -65,10 +72,11 @@ void PowerMeterApp::compute_task()
                 m_i_dc_blocker.set_current_dc_bias(i_mean);
                 ESP_LOGI(TAG, "ADC_I: DC bias %0.1f, max %0.1f, min %0.1f", i_mean, i_max, i_min);
 
-                // Save 4 last centered samples for the next chunk
-                for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
-                    prev_v_history[i] = m_v_dc_blocker.process(v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT + i]);
+                // Save last centered samples for the next chunk
+                for (int i = 0; i < V_SHIFT_SAMPLES; i++) {
+                    prev_v_history[i] = m_v_dc_blocker.process(v_array[CHUNK_SIZE - V_SHIFT_SAMPLES + i]);
                 }
+                prev_i_last = m_i_dc_blocker.process(i_array[CHUNK_SIZE - 1]);
                 last_energy_update_us = now_us;
                 continue;
             }
@@ -98,7 +106,7 @@ void PowerMeterApp::compute_task()
                 if (is_short_rf_transient && std::abs(v_array[i] - current_v_bias) > SPIKE_THRESHOLD_ADC) {
                     // Replace the corrupted impulse sample with the last clean centered sample
                     // without feeding the spike into m_v_dc_blocker
-                    v_array[i] = (i > 0) ? v_array[i - 1] : prev_v_history[LM_COARS_SAMPLES_SHIFT - 1];
+                    v_array[i] = (i > 0) ? v_array[i - 1] : prev_v_history[V_SHIFT_SAMPLES - 1];
                 }
                 else {
                     v_array[i] = m_v_dc_blocker.process(v_array[i]);
@@ -107,15 +115,19 @@ void PowerMeterApp::compute_task()
             }
             // -----------------------------------------------------------
 
-            // Get first 4 samples from the previous chunk
-            memcpy(&aligned_v_array[0], &prev_v_history[0], LM_COARS_SAMPLES_SHIFT * sizeof(float));
+            // Get first samples from the previous chunk
+            memcpy(&aligned_v_array[0], &prev_v_history[0], V_SHIFT_SAMPLES * sizeof(float));
             // Fill the rest samples from the new chunk
-            memcpy(&aligned_v_array[LM_COARS_SAMPLES_SHIFT], &v_array[0], (CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT) * sizeof(float));
-            // Save the last 4 samples of the new chunk for the next reading
-            memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT], LM_COARS_SAMPLES_SHIFT * sizeof(float));
+            memcpy(&aligned_v_array[V_SHIFT_SAMPLES], &v_array[0], (CHUNK_SIZE - V_SHIFT_SAMPLES) * sizeof(float));
+            // Save the last samples of the new chunk for the next reading
+            memcpy(&prev_v_history[0], &v_array[CHUNK_SIZE - V_SHIFT_SAMPLES], V_SHIFT_SAMPLES * sizeof(float));
 
-            // Read the dynamically measured ADC sampling rate per channel
-            const float current_fs_hz = m_actual_sample_freq_hz.load(std::memory_order_relaxed);
+            // Delay I by the fractional remainder: i(n - frac) between i[n] and i[n - 1]
+            aligned_i_array[0] = (1.0f - I_SHIFT_FRAC) * i_array[0] + I_SHIFT_FRAC * prev_i_last;
+            for (int n = 1; n < CHUNK_SIZE; n++) {
+                aligned_i_array[n] = (1.0f - I_SHIFT_FRAC) * i_array[n] + I_SHIFT_FRAC * i_array[n - 1];
+            }
+            prev_i_last = i_array[CHUNK_SIZE - 1];
 
             // --- CALCULATE THE GRID FREQUENCY (15 Hz .. 65 Hz) ---
 
@@ -124,8 +136,8 @@ void PowerMeterApp::compute_task()
             // Broad hardware bounds: 15.0 Hz (~266.7 samples) to 65.0 Hz (~61.5 samples)
             const float MIN_FREQ_HZ = 15.0f;
             const float MAX_FREQ_HZ = 65.0f;
-            const float MIN_VALID_PERIOD = current_fs_hz / MAX_FREQ_HZ; // ~61.5 samples
-            const float MAX_VALID_PERIOD = current_fs_hz / MIN_FREQ_HZ; // ~266.7 samples
+            const float MIN_VALID_PERIOD = CHANNEL_FREQ_HZ / MAX_FREQ_HZ; // ~61.5 samples
+            const float MAX_VALID_PERIOD = CHANNEL_FREQ_HZ / MIN_FREQ_HZ; // ~266.7 samples
 
             // Deadtime lockout: ~75% of the minimum period at 65 Hz (~45 samples / 11.2 ms)
             const int DEADTIME_SAMPLES = static_cast<int>(MIN_VALID_PERIOD * 0.75f);
@@ -209,7 +221,7 @@ void PowerMeterApp::compute_task()
 
                 if (inlier_count > 0) {
                     const double avg_period_samples = inlier_sum / inlier_count;
-                    m_frequency = static_cast<float>(current_fs_hz / avg_period_samples);
+                    m_frequency = static_cast<float>(CHANNEL_FREQ_HZ / avg_period_samples);
                 }
             }
             else {
@@ -248,7 +260,7 @@ void PowerMeterApp::compute_task()
             }
 
             // Calculate exact wall-clock elapsed time since the previous chunk
-            double dt_seconds = static_cast<double>(CHUNK_SIZE) / static_cast<double>(current_fs_hz);
+            double dt_seconds = static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ;
             if (last_energy_update_us > 0) {
                 const int64_t elapsed_us = now_us - last_energy_update_us;
                 // Use hardware wall-clock delta if within reasonable bounds (up to 2.0s to bridge any brief hiccup)
@@ -267,7 +279,7 @@ void PowerMeterApp::compute_task()
                 m_apparent_power = m_v_rms * m_i_rms;               // VA
 
                 float real_pwr = 0;
-                dsps_dotprod_f32(&aligned_v_array[dsp_start_idx], &i_array[dsp_start_idx], &real_pwr, dsp_sample_count);
+                dsps_dotprod_f32(&aligned_v_array[dsp_start_idx], &aligned_i_array[dsp_start_idx], &real_pwr, dsp_sample_count);
                 real_pwr /= dsp_sample_count;
                 real_pwr *= m_settings.v_coef * m_settings.i_coef;  // Watts
                 m_real_power = real_pwr;
@@ -298,6 +310,7 @@ void PowerMeterApp::compute_task()
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
     }
 
+    delete[] aligned_i_array;
     delete[] aligned_v_array;
     delete[] i_array;
     delete[] v_array;

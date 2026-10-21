@@ -3,6 +3,7 @@
 #include "Filters.h"
 #include "../resources/SplashScreen_PowerMeter_128x64.h"
 #include <list>
+#include <optional>
 
 #include <esp_wifi.h>
 #include <esp_ota_ops.h>
@@ -12,6 +13,8 @@
 static const std::array<uint8_t, 4> SETTINGS_PIN = DEVICE_PIN;
 
 #define READINGS_PER_SECOND 5
+#define ENERGY_SAVE_STEP_WH 100.0
+#define ENERGY_SAVE_MIN_PERIOD_MS 60000
 
 enum ScreenPage: uint8_t {
     SplashScreen,
@@ -77,6 +80,7 @@ struct DisplayContext
     AdaptiveDisplayFilter filter_w { 10 };
     // Filter filter_pf{ 0.1 };
     MedianEMAFilter filter_hz{ 0.25 };
+    HysteresisQuantizer quant_hz{ 0.01f };
     // Filter filter_sh{ 0.3 };
 
     bool with_display = false;
@@ -100,6 +104,9 @@ struct DisplayContext
     bool settings_unlocked = false;
     std::array<uint8_t, std::size(SETTINGS_PIN)> pin_digits {};
     uint8_t pin_index = 0;
+
+    std::optional<int64_t> saved_energy_step;   // Energy counter in ENERGY_SAVE_STEP_WH units at the last periodic save
+    TickType_t last_energy_save_tick = 0;
 
     void clear_screen(bool clear_inverse = true) {
         memset(lines, 0x20, sizeof(lines));
@@ -278,8 +285,8 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         ? (ds.filter_w.reset(), ds.inverse[2] = false, 0.0f)
         : ds.filter_w.process(result.real_power, &ds.inverse[2]);
     m.power.f_hz = std::isnan(result.frequency)
-        ? (ds.filter_hz.reset(), ds.inverse[6] = false, NAN)
-        : ds.filter_hz.process(result.frequency, &ds.inverse[6]);
+        ? (ds.filter_hz.reset(), ds.quant_hz.reset(), ds.inverse[6] = false, NAN)
+        : ds.quant_hz.process(ds.filter_hz.process(result.frequency, &ds.inverse[6]));
     //float f_cos = filter_pf.process(result.cos_phi);
     //float f_sh = filter_sh.process(result.vi_shift);
     if (m.power.f_v < m_settings.v_acc_energy_save) {
@@ -290,6 +297,19 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     }
     else {
         m_acc_energy_saved = false;
+    }
+    // Periodic save to limit the loss on an unexpected power-off
+    const int64_t energy_step = std::floor(result.energy / ENERGY_SAVE_STEP_WH);
+    const TickType_t now = xTaskGetTickCount();
+    if (!ds.saved_energy_step) {
+        ds.saved_energy_step = energy_step;
+        ds.last_energy_save_tick = now;
+    }
+    else if (energy_step != *ds.saved_energy_step &&
+             now - ds.last_energy_save_tick >= pdMS_TO_TICKS(ENERGY_SAVE_MIN_PERIOD_MS)) {
+        SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy);
+        ds.saved_energy_step = energy_step;
+        ds.last_energy_save_tick = now;
     }
     m.power.f_wh = result.energy;
     m.power.f_pf = NAN;
