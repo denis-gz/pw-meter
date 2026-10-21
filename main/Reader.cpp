@@ -12,11 +12,11 @@ void PowerMeterApp::setup_reader(bool disposing)
     }
     else {
         ESP_LOGI(TAG, "reader setup");
-        adc_unit_t adc_unit_id = {};
-        ESP_ERROR_CHECK(adc_continuous_io_to_channel(CONFIG_PIN_ADC_V, &adc_unit_id, &m_adc_v_channel_id));
-        if (adc_unit_id != ADC_UNIT_1)
+        adc_unit_t adc_v_unit_id = {};
+        ESP_ERROR_CHECK(adc_continuous_io_to_channel(CONFIG_PIN_ADC_V, &adc_v_unit_id, &m_adc_v_channel_id));
+        if (adc_v_unit_id != ADC_UNIT_1)
             ESP_ERROR_CHECK(ESP_ERR_NOT_ALLOWED);
-        ESP_LOGI(TAG, "ADC_V: working with ADC_UNIT_%d, ADC_CHANNEL_%0d", adc_unit_id + 1, m_adc_v_channel_id);
+        ESP_LOGI(TAG, "ADC_V: working with ADC_UNIT_%d, ADC_CHANNEL_%0d", adc_v_unit_id + 1, m_adc_v_channel_id);
 
         adc_unit_t adc_i_unit_id = {};
         ESP_ERROR_CHECK(adc_continuous_io_to_channel(CONFIG_PIN_ADC_I, &adc_i_unit_id, &m_adc_i_channel_id));

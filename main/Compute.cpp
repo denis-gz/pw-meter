@@ -2,8 +2,10 @@
 
 #include <esp_log.h>
 #include <esp_dsp.h>
+#include <esp_timer.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "common.h"
 
@@ -20,6 +22,9 @@ void PowerMeterApp::compute_task()
     // goes ahead of voltage due to LM358 signal processing delay
     float prev_v_history[LM_COARS_SAMPLES_SHIFT] {};
 
+    // Track exact wall-clock time for zero-drift energy accumulation
+    int64_t last_energy_update_us = 0;
+
     while (!m_stop_tasks) {
         // Check if we have enough samples in BOTH buffers to do a full calculation
         if (m_v_ring_buffer.available() >= CHUNK_SIZE &&
@@ -28,6 +33,8 @@ void PowerMeterApp::compute_task()
             // Pull the data out of the lock-free buffers
             m_v_ring_buffer.pop_burst(v_array, CHUNK_SIZE);
             m_i_ring_buffer.pop_burst(i_array, CHUNK_SIZE);
+
+            const int64_t now_us = esp_timer_get_time();
 
             // Sacrifice the first chunk to perform initial DC bias learning
             if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
@@ -58,40 +65,47 @@ void PowerMeterApp::compute_task()
                 m_i_dc_blocker.set_current_dc_bias(i_mean);
                 ESP_LOGI(TAG, "ADC_I: DC bias %0.1f, max %0.1f, min %0.1f", i_mean, i_max, i_min);
 
-                // Save 4 last centered bytes for the next chunk
+                // Save 4 last centered samples for the next chunk
                 for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
                     prev_v_history[i] = m_v_dc_blocker.process(v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT + i]);
                 }
+                last_energy_update_us = now_us;
                 continue;
             }
 
-            // --- THE RF CHUNK REJECTION ---
+            // --- SURGICAL RF SPIKE FILTER & OVERVOLTAGE PASS-THROUGH ---
+            // Instead of dropping the entire 800-sample chunk (which loses 200ms of energy metering
+            // and blocks >270V overvoltage readings), we check how many samples exceed SPIKE_THRESHOLD_ADC:
+            // - 1..5 samples (< 1.25 ms): It is a fast RF/switching needle -> despike in-place without corrupting DCBlocker.
+            // - > 5 samples: It is a genuine high-voltage AC sine wave (e.g. 280V-400V neutral fault) -> process normally!
 
-            bool rf_spike_detected = false;
-
-            // Calculate the corresponding raw ADC amplitude
             const float SPIKE_THRESHOLD_ADC = (MAX_EXPECTED_V_RMS * M_SQRT2) / m_settings.v_coef;
+            const float current_v_bias = m_v_dc_blocker.get_current_dc_bias();
+
+            int spike_samples_count = 0;
+            for (int i = 0; i < CHUNK_SIZE; i++) {
+                if (std::abs(v_array[i] - current_v_bias) > SPIKE_THRESHOLD_ADC) {
+                    spike_samples_count++;
+                }
+            }
+
+            const bool is_short_rf_transient = (spike_samples_count > 0 && spike_samples_count <= 5);
+            if (is_short_rf_transient) {
+                ESP_LOGW(TAG, "Short RF transient (%d samples) despiked in-place.", spike_samples_count);
+            }
 
             for (int i = 0; i < CHUNK_SIZE; i++) {
-                // Strip the DC bias
-                v_array[i] = m_v_dc_blocker.process(v_array[i]);
+                if (is_short_rf_transient && std::abs(v_array[i] - current_v_bias) > SPIKE_THRESHOLD_ADC) {
+                    // Replace the corrupted impulse sample with the last clean centered sample
+                    // without feeding the spike into m_v_dc_blocker
+                    v_array[i] = (i > 0) ? v_array[i - 1] : prev_v_history[LM_COARS_SAMPLES_SHIFT - 1];
+                }
+                else {
+                    v_array[i] = m_v_dc_blocker.process(v_array[i]);
+                }
                 i_array[i] = m_i_dc_blocker.process(i_array[i]);
-
-                // If the centered value exceeds physical possibility, flag it
-                if (v_array[i] > SPIKE_THRESHOLD_ADC || v_array[i] < -SPIKE_THRESHOLD_ADC) {
-                    rf_spike_detected = true;
-                }
             }
-
-            if (rf_spike_detected) {
-                // Update the history buffer so the *next* chunk has a clean seam
-                for (int i = 0; i < LM_COARS_SAMPLES_SHIFT; i++) {
-                    prev_v_history[i] = v_array[CHUNK_SIZE - LM_COARS_SAMPLES_SHIFT + i];
-                }
-                ESP_LOGW(TAG, "Hardware transient detected. Dropping chunk.");
-                continue;
-            }
-            // ------------------------------
+            // -----------------------------------------------------------
 
             // Get first 4 samples from the previous chunk
             memcpy(&aligned_v_array[0], &prev_v_history[0], LM_COARS_SAMPLES_SHIFT * sizeof(float));
@@ -177,12 +191,11 @@ void PowerMeterApp::compute_task()
             }
 
             if (cycle_periods_count > 0) {
-                // Stage 2: Find median period in this chunk and average only inliers (within +/- 3% of median)
-                // This rejects single-cycle zero-crossing glitches at ANY operating frequency (15..65 Hz)
+                // Stage 2: Find median period in this chunk and average only inliers (within +/- 1.5% of median)
                 std::array<float, 16> sorted = cycle_periods;
                 std::sort(sorted.begin(), sorted.begin() + cycle_periods_count);
                 const float median_period = sorted[cycle_periods_count / 2];
-                const float tolerance = median_period * 0.03f;
+                const float tolerance = median_period * 0.015f;
 
                 double inlier_sum = 0.0;
                 int inlier_count = 0;
@@ -234,6 +247,17 @@ void PowerMeterApp::compute_task()
                 m_i_rms = 0.0f;
             }
 
+            // Calculate exact wall-clock elapsed time since the previous chunk
+            double dt_seconds = static_cast<double>(CHUNK_SIZE) / static_cast<double>(current_fs_hz);
+            if (last_energy_update_us > 0) {
+                const int64_t elapsed_us = now_us - last_energy_update_us;
+                // Use hardware wall-clock delta if within reasonable bounds (up to 2.0s to bridge any brief hiccup)
+                if (elapsed_us > 0 && elapsed_us < 2000000) {
+                    dt_seconds = static_cast<double>(elapsed_us) * 1e-6;
+                }
+            }
+            last_energy_update_us = now_us;
+
             if (m_v_rms == 0.0f || m_i_rms == 0.0f) {
                 m_apparent_power = 0.0f;
                 m_real_power = 0.0f;
@@ -248,9 +272,8 @@ void PowerMeterApp::compute_task()
                 real_pwr *= m_settings.v_coef * m_settings.i_coef;  // Watts
                 m_real_power = real_pwr;
 
-                // Integrate energy over the full 800-sample chunk duration (~0.2 s) using the clean cycle-locked power
-                const double CHUNK_TIME = static_cast<double>(CHUNK_SIZE) / static_cast<double>(current_fs_hz);
-                m_acc_energy += m_real_power * CHUNK_TIME;          // Yields watt-seconds
+                // Integrate energy using true wall-clock elapsed time (zero lost chunks!)
+                m_acc_energy += m_real_power * dt_seconds;          // Yields watt-seconds
             }
 
             InterfaceTaskMessage qmsg {
