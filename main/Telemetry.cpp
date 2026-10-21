@@ -346,9 +346,6 @@ void PowerMeterApp::set_mqtt_topic(const string_t& value)
 
 void PowerMeterApp::on_time_sync(timeval* tv)
 {
-    if (!static_cast<timeval>(s_start_time).tv_sec) {
-        s_start_time = *tv;
-    }
     std::tm local;
     if (localtime_r(&tv->tv_sec, &local)) {
         char buf[64];

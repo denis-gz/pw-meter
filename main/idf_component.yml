@@ -2,7 +2,7 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: '>=5.5.0'
+    version: '~5.5.6'
   # # Put list of dependencies here
   # # For components maintained by Espressif:
   # component: "~1.0.0"
@@ -17,5 +17,5 @@ dependencies:
   denis-gz/ssd1306:
     path: components/ssd1306/
     git: https://github.com/denis-gz/esp-idf-ssd1306.git
-    version: "master"
-  espressif/esp-dsp: '*'
+    version: "ae5c2cdcae26e0e87248b1734bd52c46dc7bd3df"
+  espressif/esp-dsp: '~1.8.2'

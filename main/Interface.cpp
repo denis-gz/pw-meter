@@ -6,6 +6,7 @@
 
 #include <esp_wifi.h>
 #include <esp_ota_ops.h>
+#include <esp_timer.h>
 #include "pin_creds.h"
 
 static const std::array<uint8_t, 4> SETTINGS_PIN = DEVICE_PIN;
@@ -370,7 +371,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
             }
             uint32_t secs = ds.dev.uptime;
             uint16_t days = secs / 86400;
-            uint16_t hours = secs / 3600;
+            uint16_t hours = (secs % 86400) / 3600;
             uint16_t minutes = (secs % 3600) / 60;
             if (days < 1000) {
                 snprintf(ds.lines[3].data(), sizeof(display_line_t), "Uptm : %03hu.%02hu:%02hu", days, hours, minutes);
@@ -452,9 +453,14 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                     if (strlen(m_settings.mqtt_creds.data()) == 0) {
                                         snprintf(ds.lines[2].data(), sizeof(display_line_t), "%s", "(empty)");
                                     }
-                                    else for (int i = 0; i < 6; ++i) {
-                                        const char* part = m_settings.mqtt_creds.data() + (i * 16);
-                                        snprintf(ds.lines[i + 2].data(), sizeof(display_line_t), "%-16.16s", part);
+                                    else {
+                                        decltype(m_settings.mqtt_creds) creds(m_settings.mqtt_creds);
+                                        if (char* sep = strchr(creds.data(), ':'))
+                                            std::fill(sep + 1, creds.data() + strlen(creds.data()), '*');
+                                        for (int i = 0; i < 6; ++i) {
+                                            const char* part = creds.data() + (i * 16);
+                                            snprintf(ds.lines[i + 2].data(), sizeof(display_line_t), "%-16.16s", part);
+                                        }
                                     }
                                     break;
                                 }
@@ -870,7 +876,7 @@ void PowerMeterApp::on_encoder_rotate(bool is_ccw)
     };
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (xQueueSendFromISR(m_interface_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
-        ESP_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
+        ESP_DRAM_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
     }
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
@@ -885,7 +891,7 @@ void PowerMeterApp::on_encoder_click(bool is_long)
     };
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (xQueueSendFromISR(m_interface_queue, &qmsg, &xHigherPriorityTaskWoken) != pdPASS) {
-        ESP_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
+        ESP_DRAM_LOGW(TAG, "Interface queue is full, dropping EncoderInputMessage");
     }
     if (xHigherPriorityTaskWoken) {
         portYIELD_FROM_ISR();
@@ -915,7 +921,7 @@ void PowerMeterApp::post_log(display_line_t message)
 void PowerMeterApp::get_device_metrics(MqttMessage& m)
 {
     m_cpu_meter.get_load(m.device.cpu0, m.device.cpu1);
-    m.device.uptime = m.time - static_cast<timeval>(s_start_time).tv_sec;
+    m.device.uptime = esp_timer_get_time() / 1000000;
     m.device.heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     m.device.lblk = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 }

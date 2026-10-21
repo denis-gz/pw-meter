@@ -188,8 +188,6 @@ private:
     void set_indicator(led_mode_t mode);
 
 private:
-    static std::atomic<timeval> s_start_time;
-
     adc_channel_t m_adc_v_channel_id {};
     adc_channel_t m_adc_i_channel_id {};
     adc_cali_handle_t m_adc_v_cali {};

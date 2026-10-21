@@ -17,7 +17,7 @@ constexpr const int64_t HIGH_STATE_LONG_CLICK_INTERVAL_US = 350 * 1000LL;   // 3
 Button::Button(int pin, callback_t on_click)
 {
     std::call_once(s_isr_service_flag, []() {
-        esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+        esp_err_t err = gpio_install_isr_service(0);
         // Ignore the error if another module already installed it!
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_ERROR_CHECK(err);
@@ -65,7 +65,7 @@ Button::~Button()
     }
 }
 
-void IRAM_ATTR Button::handler()
+void Button::handler()
 {
     int64_t now_time = esp_timer_get_time();
     int level = gpio_get_level(m_pin);

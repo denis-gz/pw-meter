@@ -1,7 +1,6 @@
 #include "RotaryEncoder.h"
 
 #include <freertos/FreeRTOS.h>
-#include <driver/gpio.h>
 #include <esp_log.h>
 
 #include "common.h"
@@ -24,9 +23,6 @@ RotaryEncoder::RotaryEncoder(int pin_A, int pin_B, std::function<void(bool)> on_
 
     pcnt_glitch_filter_config_t pcnt_glitch_config = { .max_glitch_ns = 7500 };
     ESP_ERROR_CHECK(pcnt_unit_set_glitch_filter(m_unit, &pcnt_glitch_config));
-
-    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_B)));
-    ESP_ERROR_CHECK(gpio_pullup_en(static_cast<gpio_num_t>(pin_B)));
 
     pcnt_chan_config_t pcnt_chan_config = {
         .edge_gpio_num = pin_A,
@@ -70,7 +66,7 @@ int RotaryEncoder::Counter() const
 }
 
 
-bool IRAM_ATTR RotaryEncoder::pcnt_watch_callback(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t* edata, void* user_ctx)
+bool RotaryEncoder::pcnt_watch_callback(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t* edata, void* user_ctx)
 {
     auto& _ = *static_cast<RotaryEncoder*>(user_ctx);
 

@@ -1,7 +1,5 @@
 #include "PowerMeterApp.h"
 
-std::atomic<timeval> PowerMeterApp::s_start_time {};
-
 PowerMeterApp::PowerMeterApp()
     : m_encoder(CONFIG_PIN_ENCODER_A, CONFIG_PIN_ENCODER_B, [this](bool is_ccw) { on_encoder_rotate(is_ccw); })
     , m_encoder_key(CONFIG_PIN_ENCODER_KEY, [this] (bool is_long) { on_encoder_click(is_long); })

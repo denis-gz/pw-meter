@@ -10,31 +10,31 @@ menu "Project Configuration"
     config PIN_ENCODER_A
         int "Pin number of rotary encoder channel A output"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 18
+        default 15
 
     config PIN_ENCODER_B
         int "Pin number of rotary encoder channel B output"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 17
+        default 16
 
     config PIN_ENCODER_KEY
         int "Pin number of rotary encoder key output"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 16
+        default 14
 
     config PIN_LED
         int "Pin number of LED (pull-down, active high)"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 1
+        default 13
 
     config PIN_ADC_V
         int "Pin number of ADC_V channel input"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 4
+        default 9
 
     config PIN_ADC_I
         int "Pin number of ADC_I channel input"
         range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 9
+        default 6
 
 endmenu

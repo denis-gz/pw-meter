@@ -25,6 +25,6 @@ direct_dependencies:
 - denis-gz/ssd1306
 - espressif/esp-dsp
 - idf
-manifest_hash: d0461cca6938f6741e33b0b0121839e85fb8dab5d5db7b70bc885c27211ba0eb
+manifest_hash: 826e038f34a2496e4a32a5df0384fd878df29c35830d18cdec0d1d2e57a6330b
 target: esp32s3
 version: 2.0.0

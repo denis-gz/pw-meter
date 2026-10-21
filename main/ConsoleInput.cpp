@@ -80,8 +80,8 @@ bool PowerMeterApp::input_value(int& value)
     string_t input {};
     if (get_console_input(input.data(), sizeof(input))) {
         char* endptr;
-        int val = strtod(input.data(), &endptr);
-        if (endptr != input.data()) { // Check if we actually parsed a number
+        long val = strtol(input.data(), &endptr, 10);
+        if (endptr != input.data() && *endptr == '\0') { // Check if we actually parsed a whole number
             value = val;
             return true;
         }
