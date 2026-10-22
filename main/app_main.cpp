@@ -26,7 +26,6 @@ extern "C" void app_main() {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
         ESP_LOGI(TAG, "Restarting...");
     }
     while (1);

@@ -2,6 +2,22 @@
 #include "common.h"
 
 #include <esp_log.h>
+#include <bit>
+
+// Floats are stored in NVS as raw u32/u64 bits, a missing key keeps the default value
+static void get_value(nvs_handle_t handle, const char* key, float& value)
+{
+    uint32_t raw;
+    if (nvs_get_u32(handle, key, &raw) == ESP_OK)
+        value = std::bit_cast<float>(raw);
+}
+
+static void get_value(nvs_handle_t handle, const char* key, double& value)
+{
+    uint64_t raw;
+    if (nvs_get_u64(handle, key, &raw) == ESP_OK)
+        value = std::bit_cast<double>(raw);
+}
 
 void SettingsManager::setup(bool disposing)
 {
@@ -48,13 +64,13 @@ void SettingsManager::load(DeviceSettings& settings)
     if (nvs_get_str(handle, KEY_MQTT_TOPIC, settings.mqtt_topic.data(), &len) != ESP_OK)
         settings.mqtt_topic.fill(0);
 
-    nvs_get_u32(handle, KEY_MQTT_PERIOD, reinterpret_cast<uint32_t*>(&settings.mqtt_period));
-    nvs_get_u32(handle, KEY_I_NOISE_FLOOR, reinterpret_cast<uint32_t*>(&settings.i_noise_floor));
-    nvs_get_u32(handle, KEY_V_NOISE_FLOOR, reinterpret_cast<uint32_t*>(&settings.v_noise_floor));
-    nvs_get_u32(handle, KEY_I_COEF, reinterpret_cast<uint32_t*>(&settings.i_coef));
-    nvs_get_u32(handle, KEY_V_COEF, reinterpret_cast<uint32_t*>(&settings.v_coef));
-    nvs_get_u32(handle, KEY_V_ACC_ENERGY_SAVE, reinterpret_cast<uint32_t*>(&settings.v_acc_energy_save));
-    nvs_get_u64(handle, KEY_ACC_ENERGY, reinterpret_cast<uint64_t*>(&settings.acc_energy));
+    get_value(handle, KEY_MQTT_PERIOD, settings.mqtt_period);
+    get_value(handle, KEY_I_NOISE_FLOOR, settings.i_noise_floor);
+    get_value(handle, KEY_V_NOISE_FLOOR, settings.v_noise_floor);
+    get_value(handle, KEY_I_COEF, settings.i_coef);
+    get_value(handle, KEY_V_COEF, settings.v_coef);
+    get_value(handle, KEY_V_ACC_ENERGY_SAVE, settings.v_acc_energy_save);
+    get_value(handle, KEY_ACC_ENERGY, settings.acc_energy);
     nvs_close(handle);
 }
 
@@ -71,7 +87,7 @@ void SettingsManager::save(const char* key, const char* value) {
 void SettingsManager::save(const char* key, float value) {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_set_u32(handle, key, *reinterpret_cast<uint32_t*>(&value));
+        nvs_set_u32(handle, key, std::bit_cast<uint32_t>(value));
         nvs_commit(handle);
         nvs_close(handle);
         ESP_LOGI(TAG, "Saved float [%s]: %f", key, value);
@@ -81,7 +97,7 @@ void SettingsManager::save(const char* key, float value) {
 void SettingsManager::save(const char* key, double value) {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
-        nvs_set_u64(handle, key, *reinterpret_cast<uint64_t*>(&value));
+        nvs_set_u64(handle, key, std::bit_cast<uint64_t>(value));
         nvs_commit(handle);
         nvs_close(handle);
         ESP_LOGI(TAG, "Saved double [%s]: %f", key, value);

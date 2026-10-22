@@ -128,6 +128,10 @@ bool PowerMeterApp::get_console_input(char* buffer, size_t max_len)
         c = getchar();
         // If the call is non-blocking, getchar() returns immediately
         if (c == 0xFFFF || c == EOF) {
+            if (m_stop_tasks) {
+                buffer[0] = '\0';
+                return false;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }

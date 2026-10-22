@@ -8,9 +8,6 @@ docs/flow/
 
 /sdkconfig.old
 
-main/wifi_creds.h
-main/mqtt_creds.h
-
 # For PCBs designed using KiCad: https://www.kicad.org/
 # Format documentation: https://kicad.org/help/file-formats/
 

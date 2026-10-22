@@ -2,15 +2,29 @@
 
 #include "Filters.h"
 #include "../resources/SplashScreen_PowerMeter_128x64.h"
+#include <cctype>
 #include <list>
 #include <optional>
 
 #include <esp_wifi.h>
 #include <esp_ota_ops.h>
 #include <esp_timer.h>
-#include "pin_creds.h"
+#include <esp_app_desc.h>
 
-static const std::array<uint8_t, 4> SETTINGS_PIN = DEVICE_PIN;
+static constexpr size_t PIN_LENGTH = 4;
+static constexpr const char HEX_DIGITS[] = "0123456789ABCDEF";
+
+// Settings PIN: the leading hex digits of the ELF SHA256, as shown in the boot log
+static std::array<uint8_t, PIN_LENGTH> get_settings_pin()
+{
+    char sha[PIN_LENGTH + 1] {};
+    esp_app_get_elf_sha256(sha, sizeof(sha));
+
+    std::array<uint8_t, PIN_LENGTH> pin {};
+    for (size_t i = 0; i < PIN_LENGTH; i++)
+        pin[i] = isdigit(sha[i]) ? sha[i] - '0' : tolower(sha[i]) - 'a' + 10;
+    return pin;
+}
 
 #define READINGS_PER_SECOND 5
 #define ENERGY_SAVE_STEP_WH 100.0
@@ -102,7 +116,7 @@ struct DisplayContext
     PowerMeterApp::MqttMessage::DeviceMetrics dev {};
 
     bool settings_unlocked = false;
-    std::array<uint8_t, std::size(SETTINGS_PIN)> pin_digits {};
+    std::array<uint8_t, PIN_LENGTH> pin_digits {};
     uint8_t pin_index = 0;
 
     std::optional<int64_t> saved_energy_step;   // Energy counter in ENERGY_SAVE_STEP_WH units at the last periodic save
@@ -163,11 +177,10 @@ void PowerMeterApp::setup_interface(bool disposing)
             i2c_del_master_bus(m_oled._i2c_bus_handle);
             m_oled._i2c_bus_handle = nullptr;
         }
-        vQueueDelete(m_interface_queue), m_interface_queue = nullptr;
     }
     else {
         ESP_LOGI(TAG, "interface setup");
-        m_interface_queue = xQueueCreate(10, sizeof(InterfaceTaskMessage));
+        ds = DisplayContext {};     // Static, survives app restarts
 
         i2c_master_init(&m_oled, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
         m_led.init();
@@ -267,6 +280,7 @@ void PowerMeterApp::interface_task()
 
     setup_interface(kDisposing);
     ESP_LOGI(TAG, "interface_task: finished");
+    xEventGroupSetBits(m_task_exit_group, INTERFACE_EXIT_BIT);
     vTaskDelete(nullptr);
 }
 
@@ -550,7 +564,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 pin_str[char_idx] = '*'; // Past digits
                             }
                             else if (i == ds.pin_index) {
-                                pin_str[char_idx] = '0' + ds.pin_digits[i]; // Current digit
+                                pin_str[char_idx] = HEX_DIGITS[ds.pin_digits[i]]; // Current digit
                             }
                         }
                         snprintf(ds.lines[3].data(), sizeof(display_line_t), "%s", pin_str);
@@ -630,12 +644,12 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     }
                     break;
                 case PinInput:
-                    // Rotate to change the current digit (0-9 with wrap-around)
+                    // Rotate to change the current digit (0-F with wrap-around)
                     if (encoder.action == EncoderInputAction::Next) {
-                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 1) % 10;
+                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 1) % 16;
                     }
                     else {
-                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 9) % 10;
+                        ds.pin_digits[ds.pin_index] = (ds.pin_digits[ds.pin_index] + 15) % 16;
                     }
                     ds.clear_screen();
                     break;
@@ -673,9 +687,9 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                 case PinInput:
                     // Confirm the current digit and move to the next
                     ds.pin_index++;
-                    if (ds.pin_index >= 4) {
+                    if (ds.pin_index >= PIN_LENGTH) {
                         // Validate PIN
-                        if (ds.pin_digits == SETTINGS_PIN) {
+                        if (ds.pin_digits == get_settings_pin()) {
                             ds.settings_unlocked = true;
                             ds.input_state = MenuSelection;
                             ds.item_selected = ItemDefault;
@@ -890,6 +904,10 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
 
 void PowerMeterApp::on_encoder_rotate(bool is_ccw)
 {
+    // The button ISR stays active until its object is destroyed, after the queues
+    if (m_stop_tasks)
+        return;
+
     InterfaceTaskMessage qmsg {
         .type = MessageType::EncoderInputMessage,
         .encoder_input = { .action = is_ccw ? EncoderInputAction::Prev : EncoderInputAction::Next },
@@ -905,6 +923,10 @@ void PowerMeterApp::on_encoder_rotate(bool is_ccw)
 
 void PowerMeterApp::on_encoder_click(bool is_long)
 {
+    // The button ISR stays active until its object is destroyed, after the queues
+    if (m_stop_tasks)
+        return;
+
     InterfaceTaskMessage qmsg {
         .type = MessageType::EncoderInputMessage,
         .encoder_input = { .action = is_long ? EncoderInputAction::Back : EncoderInputAction::Confirm },

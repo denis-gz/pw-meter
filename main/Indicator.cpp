@@ -3,7 +3,6 @@
 void PowerMeterApp::indicator_task()
 {
     ESP_LOGI(TAG, "indicator_task: started");
-    setup_indicator();
 
     led_mode_t current_mode = LED_STATE_OFF;
     led_mode_t background_mode = LED_STATE_OFF; // Remembers state during transient flashes
@@ -71,23 +70,12 @@ void PowerMeterApp::indicator_task()
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50)); // 50ms precise time slice
+        vTaskDelay(pdMS_TO_TICKS(50)); // 50ms time slice
     }
 
-    setup_indicator(kDisposing);
     ESP_LOGI(TAG, "indicator_task: finished");
+    xEventGroupSetBits(m_task_exit_group, INDICATOR_EXIT_BIT);
     vTaskDelete(nullptr);
-}
-
-void PowerMeterApp::setup_indicator(bool disposing)
-{
-    if (disposing) {
-        vQueueDelete(m_indicator_queue), m_indicator_queue = nullptr;
-    }
-    else {
-        ESP_LOGI(TAG, "indicator setup");
-        m_indicator_queue = xQueueCreate(10, sizeof(led_mode_t));
-    }
 }
 
 void PowerMeterApp::set_indicator(led_mode_t mode)

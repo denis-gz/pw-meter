@@ -141,8 +141,17 @@ private:
 
     friend struct DisplayContext;
 
+    // Set by each task as its very last action, before it deletes itself
+    static constexpr EventBits_t READER_EXIT_BIT    = BIT0;
+    static constexpr EventBits_t COMPUTE_EXIT_BIT   = BIT1;
+    static constexpr EventBits_t INTERFACE_EXIT_BIT = BIT2;
+    static constexpr EventBits_t TELEMETRY_EXIT_BIT = BIT3;
+    static constexpr EventBits_t INDICATOR_EXIT_BIT = BIT4;
+    static constexpr EventBits_t ALL_TASKS_EXIT_BITS = BIT0 | BIT1 | BIT2 | BIT3 | BIT4;
+
     static void on_time_sync(timeval* tv);
 
+    void setup_ipc(bool disposing = false);
     void setup_reader(bool disposing = false);
     void setup_interface(bool disposing = false);
     void start_tasks();
@@ -151,7 +160,6 @@ private:
     void setup_telemetry(bool disposing = false);
     void setup_wifi(bool disposing = false);
     void setup_mqtt(bool disposing = false);
-    void setup_indicator(bool disposing = false);
 
     void interface_task();
     void compute_task();
@@ -238,6 +246,7 @@ private:
     QueueHandle_t m_interface_queue {};
     QueueHandle_t m_telemetry_queue {};
     QueueHandle_t m_indicator_queue {};
+    EventGroupHandle_t m_task_exit_group {};
 
     esp_event_loop_handle_t m_console_event_loop {};
 };

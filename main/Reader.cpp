@@ -90,8 +90,8 @@ void PowerMeterApp::reader_task()
     bool expect_v = true;
 
     while (!m_stop_tasks) {
-        // Block and wait for a chunk of data from DMA
-        esp_err_t ret = adc_continuous_read_parse(m_adc, parsed_buf, SAMPLES_TO_READ, &samples_count, portMAX_DELAY);
+        // Block and wait for a chunk of data from DMA (timeout in ms, lets a stop request through)
+        esp_err_t ret = adc_continuous_read_parse(m_adc, parsed_buf, SAMPLES_TO_READ, &samples_count, 1000);
         if (ret == ESP_OK) {
             int invalid_count = 0;
 
@@ -152,5 +152,6 @@ void PowerMeterApp::reader_task()
 
     delete[] parsed_buf;
     ESP_LOGI(TAG, "reader_task: finished");
+    xEventGroupSetBits(m_task_exit_group, READER_EXIT_BIT);
     vTaskDelete(nullptr);
 }

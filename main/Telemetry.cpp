@@ -25,6 +25,7 @@ void PowerMeterApp::telemetry_task()
 
     setup_telemetry(kDisposing);
     ESP_LOGI(TAG, "telemetry_task: finished");
+    xEventGroupSetBits(m_task_exit_group, TELEMETRY_EXIT_BIT);
     vTaskDelete(nullptr);
 }
 
@@ -33,11 +34,9 @@ void PowerMeterApp::setup_telemetry(bool disposing)
     if (disposing) {
         sntp_set_time_sync_notification_cb(nullptr);
         setup_wifi(disposing);
-        vQueueDelete(m_telemetry_queue), m_telemetry_queue = nullptr;
     }
     else {
         ESP_LOGI(TAG, "telemetry setup");
-        m_telemetry_queue = xQueueCreate(10, sizeof(MqttMessage));
         setup_wifi(disposing);
     }
 }
@@ -49,7 +48,7 @@ void PowerMeterApp::setup_wifi(bool disposing)
 
         setup_mqtt(disposing);
 
-        esp_event_handler_unregister(IP_EVENT, ESP_EVENT_ANY_ID, member_cast<esp_event_handler_t>(&PowerMeterApp::on_wifi_event));
+        esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, member_cast<esp_event_handler_t>(&PowerMeterApp::on_wifi_event));
         esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, member_cast<esp_event_handler_t>(&PowerMeterApp::on_wifi_event));
 
         if (m_netif) {

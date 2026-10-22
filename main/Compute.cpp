@@ -335,5 +335,9 @@ void PowerMeterApp::compute_task()
     delete[] v_array;
 
     ESP_LOGI(TAG, "compute_task: finished");
-    vTaskDelete(m_compute_task = nullptr);
+    // Reader notifies this task, so it must be gone before the handle becomes invalid
+    xEventGroupWaitBits(m_task_exit_group, READER_EXIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    m_compute_task = nullptr;
+    xEventGroupSetBits(m_task_exit_group, COMPUTE_EXIT_BIT);
+    vTaskDelete(nullptr);
 }
