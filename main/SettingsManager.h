@@ -31,6 +31,8 @@ struct DeviceSettings
     static constexpr const float I_COEF = 0.02699f;
     static constexpr const float V_COEF = 0.48565f;
     static constexpr const float V_HYSTERESIS = 15.0f;          // 15 V
+    static constexpr const float MIN_FREQ_HZ = 15.0f;           // 15 Hz
+    static constexpr const float MAX_FREQ_HZ = 65.0f;           // 65 Hz
     static constexpr const float V_ACC_ENERGY_SAVE = 100.0f;    // 100 V
     static constexpr const float MQTT_PERIOD = 1.0f;            // 1 sec
 

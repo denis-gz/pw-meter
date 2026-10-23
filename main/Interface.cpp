@@ -80,7 +80,7 @@ struct DisplayContext
     AdaptiveDisplayFilter filter_w { 10 };
     // Filter filter_pf{ 0.1 };
     MedianEMAFilter filter_hz{ 0.25 };
-    HysteresisQuantizer quant_hz{ 0.01f };
+    HysteresisQuantizer quant_hz{ 0.001f };
     // Filter filter_sh{ 0.3 };
 
     bool with_display = false;
@@ -376,7 +376,7 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                 if (std::isnan(m.power.f_hz))
                     snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : (n/a)");
                 else
-                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.2fHz", m.power.f_hz);
+                    snprintf(ds.lines[6].data(), sizeof(display_line_t), "Freq  : %.3fHz", m.power.f_hz);
                 ds.inverse[3] = ds.inverse[0] || ds.inverse[1];
                 ds.inverse[5] = ds.inverse[0] || ds.inverse[1];
             }

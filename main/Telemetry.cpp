@@ -260,7 +260,7 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
                     msg.time,
                     format_float(buf[0], sizeof(buf[0]), "%.1f", msg.power.f_v),
                     format_float(buf[1], sizeof(buf[1]), "%.2f", msg.power.f_i),
-                    format_float(buf[2], sizeof(buf[2]), "%.2f", msg.power.f_hz),
+                    format_float(buf[2], sizeof(buf[2]), "%.3f", msg.power.f_hz),
                     format_float(buf[3], sizeof(buf[3]), "%.1f", msg.power.f_va),
                     format_float(buf[4], sizeof(buf[4]), "%.1f", msg.power.f_w),
                     format_float(buf[5], sizeof(buf[5]), "%.2f", msg.power.f_pf),

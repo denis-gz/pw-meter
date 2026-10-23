@@ -14,6 +14,42 @@
 constexpr int V_SHIFT_SAMPLES = static_cast<int>(LM_SAMPLES_SHIFT) + 1;
 constexpr float I_SHIFT_FRAC = V_SHIFT_SAMPLES - LM_SAMPLES_SHIFT;
 
+// Grid frequency = cycles / span of rising zero crossings over this window: error falls as 1/T
+constexpr double FREQ_WINDOW_SAMPLES = CHANNEL_FREQ_HZ * 1.0;
+
+// Rising zero crossings on the absolute sample timeline, oldest dropped past the window span
+class CrossingWindow
+{
+private:
+    std::array<double, 128> times {};
+    size_t head = 0;
+    size_t count = 0;
+
+    void drop_oldest() {
+        head = (head + 1) % times.size();
+        count--;
+    }
+
+public:
+    size_t size() const { return count; }
+    double oldest() const { return times[head]; }
+    double newest() const { return times[(head + count - 1) % times.size()]; }
+    double mean_period() const { return (newest() - oldest()) / (count - 1); }
+
+    void clear() {
+        count = 0;
+    }
+
+    void push(double t) {
+        if (count == times.size())
+            drop_oldest();
+        times[(head + count) % times.size()] = t;
+        count++;
+        while (count > 2 && t - oldest() > FREQ_WINDOW_SAMPLES)
+            drop_oldest();
+    }
+};
+
 void PowerMeterApp::compute_task()
 {
     ESP_LOGI(TAG, "compute_task: started");
@@ -31,6 +67,14 @@ void PowerMeterApp::compute_task()
 
     // Track exact wall-clock time for zero-drift energy accumulation
     int64_t last_energy_update_us = 0;
+
+    // Rising zero-crossing detector, kept across chunks on an absolute sample timeline
+    int64_t chunk_base = 0;
+    bool zc_positive_half = false;
+    float zc_prev_v = 0.0f;
+    double zc_candidate = NAN;
+    int64_t zc_last_rising = INT64_MIN / 2;
+    CrossingWindow zc_window;
 
     while (!m_stop_tasks) {
         // Check if we have enough samples in BOTH buffers to do a full calculation
@@ -134,99 +178,73 @@ void PowerMeterApp::compute_task()
             const float HYSTERESIS_THRESHOLD = DeviceSettings::V_HYSTERESIS / m_settings.v_coef;
 
             // Broad hardware bounds: 15.0 Hz (~266.7 samples) to 65.0 Hz (~61.5 samples)
-            const float MIN_FREQ_HZ = 15.0f;
-            const float MAX_FREQ_HZ = 65.0f;
-            const float MIN_VALID_PERIOD = CHANNEL_FREQ_HZ / MAX_FREQ_HZ; // ~61.5 samples
-            const float MAX_VALID_PERIOD = CHANNEL_FREQ_HZ / MIN_FREQ_HZ; // ~266.7 samples
+            const float MIN_VALID_PERIOD = CHANNEL_FREQ_HZ / DeviceSettings::MAX_FREQ_HZ; // ~61.5 samples
+            const float MAX_VALID_PERIOD = CHANNEL_FREQ_HZ / DeviceSettings::MIN_FREQ_HZ; // ~266.7 samples
 
             // Deadtime lockout: ~75% of the minimum period at 65 Hz (~45 samples / 11.2 ms)
             const int DEADTIME_SAMPLES = static_cast<int>(MIN_VALID_PERIOD * 0.75f);
 
-            bool is_positive_half = (aligned_v_array[0] > 0.0f);
-            int last_rising_edge_index = -100;
-            int last_negative_index = (aligned_v_array[0] <= 0.0f) ? 0 : -1;
-
-            float prev_crossing_index = NAN;
             int first_crossing_sample = -1;
             int last_crossing_sample = -1;
+            int chunk_crossings = 0;
 
-            // At up to 65 Hz in an 800-sample chunk, there can be at most 13 cycles
-            std::array<float, 16> cycle_periods {};
-            size_t cycle_periods_count = 0;
-
-            for (int i = 1; i < CHUNK_SIZE; i++) {
-                // Track the latest sample <= 0 before the positive hysteresis threshold is crossed
-                if (!is_positive_half && aligned_v_array[i] <= 0.0f) {
-                    last_negative_index = i;
+            // A missed or spurious crossing breaks the cycle count: restart the window
+            auto register_crossing = [&](double t) {
+                if (zc_window.size() > 0) {
+                    const double period = t - zc_window.newest();
+                    bool plausible = period >= MIN_VALID_PERIOD && period <= MAX_VALID_PERIOD;
+                    if (plausible && zc_window.size() >= 2) {
+                        const double expected = zc_window.mean_period();
+                        plausible = std::abs(period - expected) <= expected * 0.015;
+                    }
+                    if (!plausible)
+                        zc_window.clear();
                 }
+                zc_window.push(t);
+            };
 
-                // Signal must securely exceed the positive threshold to register a cycle
-                if (!is_positive_half && aligned_v_array[i] > HYSTERESIS_THRESHOLD) {
-                    is_positive_half = true;
+            for (int i = 0; i < CHUNK_SIZE; i++) {
+                const float v = aligned_v_array[i];
+                const int64_t n = chunk_base + i;
 
-                    if (i - last_rising_edge_index > DEADTIME_SAMPLES && last_negative_index >= 0) {
-                        last_rising_edge_index = i;
+                if (!zc_positive_half) {
+                    // Latest rising crossing, interpolated between the straddling samples
+                    if (zc_prev_v <= 0.0f && v > 0.0f) {
+                        const float denom = v - zc_prev_v;
+                        zc_candidate = static_cast<double>(n - 1) + ((denom > 1e-3f) ? -zc_prev_v / denom : 0.0f);
+                    }
+                    // Signal must securely exceed the positive threshold to register a cycle
+                    if (v > HYSTERESIS_THRESHOLD) {
+                        zc_positive_half = true;
+                        if (n - zc_last_rising > DEADTIME_SAMPLES && !std::isnan(zc_candidate)) {
+                            zc_last_rising = n;
+                            register_crossing(zc_candidate);
 
-                        // Advance from last_negative_index to find the exact sample pair straddling 0V
-                        int z = last_negative_index;
-                        while (z + 1 < i && aligned_v_array[z + 1] <= 0.0f) {
-                            z++;
-                        }
-
-                        // Calculate the exact sub-sample fractional index of the crossing
-                        const float denom = aligned_v_array[z + 1] - aligned_v_array[z];
-                        const float fraction = (denom > 1e-3f) ? (-aligned_v_array[z] / denom) : 0.0f;
-                        const float exact_index = static_cast<float>(z) + fraction;
-
-                        if (first_crossing_sample < 0) {
-                            first_crossing_sample = z;
-                        }
-                        last_crossing_sample = z;
-
-                        if (!std::isnan(prev_crossing_index)) {
-                            const float period_samples = exact_index - prev_crossing_index;
-
-                            // Stage 1: Validate broad physical bounds [15 Hz .. 65 Hz]
-                            if (period_samples >= MIN_VALID_PERIOD &&
-                                period_samples <= MAX_VALID_PERIOD &&
-                                cycle_periods_count < cycle_periods.size()) {
-                                cycle_periods[cycle_periods_count++] = period_samples;
+                            const int z = static_cast<int>(std::floor(zc_candidate - chunk_base));
+                            if (z >= 0) {
+                                if (first_crossing_sample < 0)
+                                    first_crossing_sample = z;
+                                last_crossing_sample = z;
+                                chunk_crossings++;
                             }
                         }
-                        prev_crossing_index = exact_index;
+                        zc_candidate = NAN;
                     }
                 }
                 // Signal must securely fall below the negative threshold to arm for the next cycle
-                else if (is_positive_half && aligned_v_array[i] < -HYSTERESIS_THRESHOLD) {
-                    is_positive_half = false;
+                else if (v < -HYSTERESIS_THRESHOLD) {
+                    zc_positive_half = false;
                 }
+                zc_prev_v = v;
             }
+            chunk_base += CHUNK_SIZE;
 
-            if (cycle_periods_count > 0) {
-                // Stage 2: Find median period in this chunk and average only inliers (within +/- 1.5% of median)
-                std::array<float, 16> sorted = cycle_periods;
-                std::sort(sorted.begin(), sorted.begin() + cycle_periods_count);
-                const float median_period = sorted[cycle_periods_count / 2];
-                const float tolerance = median_period * 0.015f;
+            if (chunk_crossings == 0)
+                zc_window.clear();
 
-                double inlier_sum = 0.0;
-                int inlier_count = 0;
-
-                for (size_t k = 0; k < cycle_periods_count; ++k) {
-                    if (std::abs(cycle_periods[k] - median_period) <= tolerance) {
-                        inlier_sum += cycle_periods[k];
-                        inlier_count++;
-                    }
-                }
-
-                if (inlier_count > 0) {
-                    const double avg_period_samples = inlier_sum / inlier_count;
-                    m_frequency = static_cast<float>(CHANNEL_FREQ_HZ / avg_period_samples);
-                }
-            }
-            else {
-                m_frequency = NAN;
-            }
+            m_frequency = (zc_window.size() >= 2)
+                ? static_cast<float>(CHANNEL_FREQ_HZ / zc_window.mean_period())
+                : NAN;
             // -----------------------------------------------------
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
@@ -235,7 +253,7 @@ void PowerMeterApp::compute_task()
             int dsp_start_idx = 0;
             int dsp_sample_count = CHUNK_SIZE;
 
-            if (cycle_periods_count >= 1 &&
+            if (chunk_crossings >= 2 &&
                 first_crossing_sample >= 0 &&
                 last_crossing_sample > first_crossing_sample) {
                 dsp_start_idx = first_crossing_sample;
@@ -254,6 +272,7 @@ void PowerMeterApp::compute_task()
             if (m_v_rms < m_settings.v_noise_floor) {
                 m_v_rms = 0.0f;
                 m_frequency = NAN;
+                zc_window.clear();
             }
             if (m_i_rms < m_settings.i_noise_floor) {
                 m_i_rms = 0.0f;
