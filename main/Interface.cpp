@@ -964,6 +964,6 @@ void PowerMeterApp::get_device_metrics(MqttMessage& m)
 {
     m_cpu_meter.get_load(m.device.cpu0, m.device.cpu1);
     m.device.uptime = esp_timer_get_time() / 1000000;
-    m.device.heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    m.device.lblk = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    m.device.heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    m.device.lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 }
