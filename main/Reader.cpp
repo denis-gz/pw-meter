@@ -134,17 +134,18 @@ void PowerMeterApp::reader_task()
 
             if (invalid_count) {
                 ESP_LOGW(TAG, "%d invalid ADC sample(s) replaced with last good values", invalid_count);
+                m_health.adc_invalid += invalid_count;
             }
 
             if (m_compute_task)
                 xTaskNotifyGive(m_compute_task);
         }
         else if (ret == ESP_ERR_TIMEOUT) {
-            //m_error_count++;
+            m_health.adc_errors++;
             continue;
         }
         else {
-            //m_error_count++;
+            m_health.adc_errors++;
         }
     }
 

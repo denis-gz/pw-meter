@@ -2,6 +2,28 @@
 
 ESP_EVENT_DEFINE_BASE(EVENT_CONSOLE_INPUT);
 
+// Mutes ESP log output while the user types, so it doesn't break into the input line
+class LogPause
+{
+    static inline std::atomic<uint32_t> s_dropped {};
+    vprintf_like_t m_prev;
+
+    static int drop(const char*, va_list) {
+        s_dropped++;
+        return 0;
+    }
+
+public:
+    LogPause() : m_prev(esp_log_set_vprintf(drop)) {
+        s_dropped = 0;
+    }
+    ~LogPause() {
+        esp_log_set_vprintf(m_prev);
+        if (const uint32_t n = s_dropped)
+            printf("[%u log message(s) suppressed during input]\n", static_cast<unsigned>(n));
+    }
+};
+
 void PowerMeterApp::setup_console_input(bool disposing)
 {
     if (disposing) {
@@ -29,46 +51,49 @@ void PowerMeterApp::setup_console_input(bool disposing)
 
 void PowerMeterApp::on_console_input_event(esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    string_t prompt = *(string_t*) event_data;
-    printf("%s", prompt.data());
-
     InterfaceTaskMessage qmsg {
         .type = MessageType::ConsoleInputMessage,
         .console_input { .action = ConsoleInputAction::None },
     };
-    switch (event_id) {
-        case DECIMAL_INPUT_ID: {
-            int value;
-            if (input_value(value)) {
-                qmsg.console_input = {
-                    .action = ConsoleInputAction::Decimal,
-                    .decimal_value = value,
-                };
+    {
+        LogPause log_pause;
+        string_t prompt = *(string_t*) event_data;
+        printf("%s", prompt.data());
+
+        switch (event_id) {
+            case DECIMAL_INPUT_ID: {
+                int value;
+                if (input_value(value)) {
+                    qmsg.console_input = {
+                        .action = ConsoleInputAction::Decimal,
+                        .decimal_value = value,
+                    };
+                }
+                break;
             }
-            break;
-        }
-        case FLOAT_INPUT_ID: {
-            float value;
-            if (input_value(value)) {
-                qmsg.console_input = {
-                    .action = ConsoleInputAction::Float,
-                    .float_value = value,
-                };
+            case FLOAT_INPUT_ID: {
+                float value;
+                if (input_value(value)) {
+                    qmsg.console_input = {
+                        .action = ConsoleInputAction::Float,
+                        .float_value = value,
+                    };
+                }
+                break;
             }
-            break;
-        }
-        case STRING_INPUT_ID: {
-            string_t value;
-            if (input_value(value)) {
-                qmsg.console_input = {
-                    .action = ConsoleInputAction::String,
-                    .string_value = value,
-                };
+            case STRING_INPUT_ID: {
+                string_t value;
+                if (input_value(value)) {
+                    qmsg.console_input = {
+                        .action = ConsoleInputAction::String,
+                        .string_value = value,
+                    };
+                }
+                break;
             }
-            break;
+            default:
+                break;
         }
-        default:
-            break;
     }
     if (xQueueSend(m_interface_queue, &qmsg, pdMS_TO_TICKS(200)) != pdPASS) {
         ESP_LOGW(TAG, "Interface queue is full, dropping ConsoleInputMessage");
@@ -121,6 +146,8 @@ bool PowerMeterApp::get_console_input(char* buffer, size_t max_len)
     }
 
     size_t index = 0;
+    m_console_cancel = false;
+    m_console_activity_tick = xTaskGetTickCount();
     printf("> "); // Prompt
     fflush(stdout);
 
@@ -128,13 +155,16 @@ bool PowerMeterApp::get_console_input(char* buffer, size_t max_len)
         c = getchar();
         // If the call is non-blocking, getchar() returns immediately
         if (c == 0xFFFF || c == EOF) {
-            if (m_stop_tasks) {
+            if (m_stop_tasks || m_console_cancel) {
+                if (m_console_cancel)
+                    printf("\n[Timed out]\n");
                 buffer[0] = '\0';
                 return false;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+        m_console_activity_tick = xTaskGetTickCount();
         // Handle Escape (Cancel)
         if (c == 27) {
             printf("\n[Canceled]\n");

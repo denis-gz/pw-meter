@@ -2,6 +2,7 @@
 
 #include "Filters.h"
 #include "../resources/SplashScreen_PowerMeter_128x64.h"
+#include <algorithm>
 #include <cctype>
 #include <list>
 #include <optional>
@@ -64,6 +65,7 @@ enum MenuItem {
     ItemVCalib,
     ItemVEnergySave,
     ItemResetEnrgy,
+    ItemWaveRecord,
 
     ItemCount,
     ItemDefault = ItemWifiSsid,
@@ -84,7 +86,8 @@ static constexpr const char MENU_ITEMS[ItemCount][16] {
     { "10. V noise flr" },
     { "11. V calib" },
     { "12. V nrgy save" },
-    { "13. Reset enrgy" }
+    { "13. Reset enrgy" },
+    { "14. Wave record" }
 };
 
 struct DisplayContext
@@ -118,6 +121,8 @@ struct DisplayContext
     bool settings_unlocked = false;
     std::array<uint8_t, PIN_LENGTH> pin_digits {};
     uint8_t pin_index = 0;
+    uint16_t wave_record_min = DeviceSettings::WAVE_RECORD_TIME;
+    uint8_t mqtt_period_edit = DeviceSettings::MQTT_PERIOD;
 
     std::optional<int64_t> saved_energy_step;   // Energy counter in ENERGY_SAVE_STEP_WH units at the last periodic save
     TickType_t last_energy_save_tick = 0;
@@ -261,17 +266,24 @@ void PowerMeterApp::interface_task()
 
         // --- IDLE TIMEOUT EVALUATION ---
         if (ds.with_display && ds.is_display_awake) {
-            if ((xTaskGetTickCount() - ds.last_interaction_tick) > DISPLAY_TIMEOUT_TICKS) {
+            TickType_t idle_ticks = xTaskGetTickCount() - ds.last_interaction_tick;
+            // Typing in the console counts as interaction too
+            if (ds.input_state == ValueInput)
+                idle_ticks = std::min(idle_ticks, xTaskGetTickCount() - m_console_activity_tick);
+            if (idle_ticks > DISPLAY_TIMEOUT_TICKS) {
                 ESP_LOGI(TAG, "Idle timeout reached. Sleeping display.");
                 ssd1306_sleep(&m_oled, true);
                 ds.is_display_awake = false;
                 ds.settings_unlocked = false;
                 if (ds.page == SettingsPage) {
+                    if (ds.input_state == ValueInput)
+                        m_console_cancel = true;
                     ds.input_state = PageSelection;
                     ds.item_selected = ItemNone;
                     ds.first_displayed_menu_item = 0;
                     ds.pin_index = 0;
                     ds.pin_digits.fill(0);
+                    ds.pause = 0;
                     ds.clear_screen();
                 }
             }
@@ -337,37 +349,36 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     ++ds.counter;
 
     // Period is 1 sec on DevicePage; 5 sec in any other condition
-    if (ds.counter % (uint32_t) (READINGS_PER_SECOND * (ds.page == DevicePage ? 1 : 5)) == 0) {
+    if (ds.counter % (READINGS_PER_SECOND * (ds.page == DevicePage ? 1 : 5)) == 0) {
         get_device_metrics(m);
         ds.dev = m.device;
     }
 
+    if (ds.counter % (READINGS_PER_SECOND * m_settings.mqtt_period) == 0) {
+        if (xQueueSend(m_telemetry_queue, &m, 0) != pdPASS) {
+            ESP_LOGW(TAG, "Telemetry queue is full, dropping MqttMessage");
+        }
+    }
+    //static constexpr const char* fmt = "\n"
+    //    "\tv_rms           = %.1fV\n"
+    //    "\ti_rms           = %.2fA\n"
+    //    "\tapparent_power  = %.1fVA\n"
+    //    "\treal_power      = %.1fW\n"
+    //    "\tenergy          = %.2fWh\n"
+    //    "\tpower_factor    = %.2f\n"
+    //    "\tfrequency       = %.2fHz\n"
+    //    "\tcpu0_load       = %.1f%%\n"
+    //    "\tcpu1_load       = %.1f%%\n"
+    //    "\tsample_shift    = %.1f\n"
+    //    "";
+    //if (0 /*ds.counter % 5 == 0*/) {
+    //    char buf[1024];
+    //    snprintf(buf, sizeof(buf), fmt, m.f_v, m.f_i, m.f_va, m.f_w, m.f_wh, m.f_pf, m.f_hz, ds.cpu0, ds.cpu1/*, f_sh */);
+    //    ESP_LOGI(TAG, "%s", buf);
+    //}
+
     if (ds.pause)
         ds.pause--;
-    if (!ds.pause) {
-        if (ds.counter % (uint32_t) (READINGS_PER_SECOND * m_settings.mqtt_period) == 0) {
-            if (xQueueSend(m_telemetry_queue, &m, 0) != pdPASS) {
-                ESP_LOGW(TAG, "Telemetry queue is full, dropping MqttMessage");
-            }
-        }
-        //static constexpr const char* fmt = "\n"
-        //    "\tv_rms           = %.1fV\n"
-        //    "\ti_rms           = %.2fA\n"
-        //    "\tapparent_power  = %.1fVA\n"
-        //    "\treal_power      = %.1fW\n"
-        //    "\tenergy          = %.2fWh\n"
-        //    "\tpower_factor    = %.2f\n"
-        //    "\tfrequency       = %.2fHz\n"
-        //    "\tcpu0_load       = %.1f%%\n"
-        //    "\tcpu1_load       = %.1f%%\n"
-        //    "\tsample_shift    = %.1f\n"
-        //    "";
-        //if (0 /*ds.counter % 5 == 0*/) {
-        //    char buf[1024];
-        //    snprintf(buf, sizeof(buf), fmt, m.f_v, m.f_i, m.f_va, m.f_w, m.f_wh, m.f_pf, m.f_hz, ds.cpu0, ds.cpu1/*, f_sh */);
-        //    ESP_LOGI(TAG, "%s", buf);
-        //}
-    }
 
     switch (ds.page) {
         case SplashScreen:
@@ -509,7 +520,9 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                     break;
                                 }
                                 case ItemMqttPeriod: {
-                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "%f sec", m_settings.mqtt_period);
+                                    snprintf(ds.lines[2].data(), sizeof(display_line_t), "Current: %d sec", m_settings.mqtt_period);
+                                    snprintf(ds.lines[3].data(), sizeof(display_line_t), "New    : %d sec", ds.mqtt_period_edit);
+                                    snprintf(ds.lines[4].data(), sizeof(display_line_t), "Push to save");
                                     break;
                                 }
                                 case ItemINoiseFloor: {
@@ -534,6 +547,23 @@ void PowerMeterApp::process_result(const ResultMessage& result)
                                 }
                                 case ItemResetEnrgy: {
                                     snprintf(ds.lines[2].data(), sizeof(display_line_t), "Push to reset...");
+                                    break;
+                                }
+                                case ItemWaveRecord: {
+                                    const int64_t left_us = m_capture_until_us - esp_timer_get_time();
+                                    if (!m_capture) {
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "Unavailable");
+                                    }
+                                    else if (left_us <= 0) {
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "Off");
+                                        snprintf(ds.lines[3].data(), sizeof(display_line_t), "Time : %dh %02dm", ds.wave_record_min / 60, ds.wave_record_min % 60);
+                                        snprintf(ds.lines[4].data(), sizeof(display_line_t), "Push to start");
+                                    }
+                                    else {
+                                        const uint16_t left_min = left_us / 60000000 + 1;
+                                        snprintf(ds.lines[2].data(), sizeof(display_line_t), "On, %hum left", left_min);
+                                        snprintf(ds.lines[4].data(), sizeof(display_line_t), "Push to stop");
+                                    }
                                     break;
                                 }
                                 default:
@@ -653,6 +683,20 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                     }
                     ds.clear_screen();
                     break;
+                case ItemDisplay: {
+                    const int step = (encoder.action == EncoderInputAction::Next) ? 1 : -1;
+                    if (ds.item_selected == ItemMqttPeriod) {
+                        ds.mqtt_period_edit = std::clamp<int>(ds.mqtt_period_edit + step,
+                            DeviceSettings::MIN_MQTT_PERIOD, DeviceSettings::MAX_MQTT_PERIOD);
+                        ds.clear_screen();
+                    }
+                    else if (ds.item_selected == ItemWaveRecord && m_capture_until_us <= esp_timer_get_time()) {
+                        ds.wave_record_min = std::clamp<int>(ds.wave_record_min + step * DeviceSettings::WAVE_RECORD_STEP,
+                            DeviceSettings::MIN_WAVE_RECORD_TIME, DeviceSettings::MAX_WAVE_RECORD_TIME);
+                        ds.clear_screen();
+                    }
+                    break;
+                }
                 default:
                     break;
             }
@@ -706,6 +750,7 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                 case MenuSelection:
                     ds.clear_screen();
                     ds.input_state = ItemDisplay;
+                    ds.mqtt_period_edit = m_settings.mqtt_period;
                     break;
                 case ItemDisplay:
                     ds.clear_screen();
@@ -747,9 +792,10 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             break;
                         }
                         case ItemMqttPeriod: {
-                            string_t prompt { "Input new MQTT period in seconds:" };
-                            esp_event_post_to(m_console_event_loop, EVENT_CONSOLE_INPUT, FLOAT_INPUT_ID, &prompt, sizeof(prompt), pdMS_TO_TICKS(100));
-                            ds.input_state = ValueInput;
+                            ESP_LOGI(TAG, "Setting new MQTT period: %d sec", ds.mqtt_period_edit);
+                            SettingsManager::save(KEY_MQTT_PERIOD, m_settings.mqtt_period = ds.mqtt_period_edit);
+                            ds.input_state = MenuSelection;
+                            ds.pause = 0;
                             break;
                         }
                         case ItemINoiseFloor: {
@@ -786,6 +832,22 @@ void PowerMeterApp::process_encoder_input(const EncoderInputMessage& encoder)
                             ESP_LOGI(TAG, "Accumulated energy counter was reset");
                             SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy = 0.0f);
                             ds.input_state = MenuSelection;
+                            ds.pause = 0;
+                            break;
+                        }
+                        case ItemWaveRecord: {
+                            const int64_t now_us = esp_timer_get_time();
+                            if (!m_capture) {
+                                ESP_LOGW(TAG, "Waveform recording is unavailable: no PSRAM");
+                            }
+                            else if (m_capture_until_us > now_us) {
+                                ESP_LOGI(TAG, "Waveform recording stopped");
+                                m_capture_until_us = 0;
+                            }
+                            else {
+                                ESP_LOGI(TAG, "Waveform recording for %d min", ds.wave_record_min);
+                                m_capture_until_us = now_us + ds.wave_record_min * 60000000LL;
+                            }
                             ds.pause = 0;
                             break;
                         }
@@ -838,15 +900,6 @@ void PowerMeterApp::process_console_input(const ConsoleInputMessage& input)
                 break;
             case ConsoleInputAction::Float:
                 switch (ds.item_selected) {
-                    case ItemMqttPeriod:
-                        if (input.float_value < 1 || input.float_value > 255) {
-                            ESP_LOGW(TAG, "New MQTT period value is invalid ([1..255]): %f", input.float_value);
-                        }
-                        else {
-                            ESP_LOGI(TAG, "Setting new MQTT period: %f", input.float_value);
-                            SettingsManager::save(KEY_MQTT_PERIOD, m_settings.mqtt_period = input.float_value);
-                        }
-                        break;
                     case ItemINoiseFloor:
                         ESP_LOGI(TAG, "Setting new I noise floor: %f A", input.float_value);
                         SettingsManager::save(KEY_I_NOISE_FLOOR, m_settings.i_noise_floor = input.float_value);
@@ -966,4 +1019,16 @@ void PowerMeterApp::get_device_metrics(MqttMessage& m)
     m.device.uptime = esp_timer_get_time() / 1000000;
     m.device.heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     m.device.lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    m.device.adc_invalid = m_health.adc_invalid;
+    m.device.adc_errors = m_health.adc_errors;
+    m.device.despikes = m_health.despikes;
+    m.device.zc_resets = m_health.zc_resets;
+    m.device.zc_shifts = m_health.zc_shifts;
+    m.device.wifi_disconnects = m_health.wifi_disconnects;
+    m.device.mqtt_disconnects = m_health.mqtt_disconnects;
+    m.device.mqtt_failures = m_health.mqtt_failures;
+    m.device.v_bias = m_health.v_bias;
+    m.device.i_bias = m_health.i_bias;
+    wifi_ap_record_t ap {};
+    m.device.rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : INT8_MIN;
 }

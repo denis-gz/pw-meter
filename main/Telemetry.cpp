@@ -9,6 +9,7 @@
 
 #define POWER_TOPIC  "/metrics/power"
 #define DEVICE_TOPIC "/metrics/device"
+#define WAVEFORM_TOPIC "/metrics/waveform"
 
 void PowerMeterApp::telemetry_task()
 {
@@ -20,6 +21,10 @@ void PowerMeterApp::telemetry_task()
         if (xQueueReceive(m_telemetry_queue, &qmsg, pdMS_TO_TICKS(100))) {
             publish_mqtt_message(qmsg);
             //ESP_LOGI(TAG, "MQTT: Published message");
+        }
+        if (m_capture_state == CaptureState::Ready) {
+            publish_mqtt_waveform();
+            m_capture_state = CaptureState::Free;
         }
     }
 
@@ -170,6 +175,8 @@ void PowerMeterApp::on_wifi_event(esp_event_base_t event_base, int32_t event_id,
                 break;
             }
             case WIFI_EVENT_STA_DISCONNECTED: {
+                if (xEventGroupGetBits(m_wifi_event_group) & WIFI_CONNECTED_BIT)
+                    m_health.wifi_disconnects++;
                 xEventGroupClearBits(m_wifi_event_group, WIFI_CONNECTED_BIT);
                 esp_wifi_connect();
                 set_indicator(LED_STATE_WIFI_SEARCHING);
@@ -202,9 +209,14 @@ void PowerMeterApp::on_mqtt_event(esp_event_base_t event_base, int32_t event_id,
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             //esp_mqtt_client_subscribe(m_mqtt_handle, MQTT_SUB_TOPIC, 0);
+            m_mqtt_connected = true;
             post_log({ "MQTT ready" });
             break;
         case MQTT_EVENT_DISCONNECTED:
+            // Failed reconnect attempts report it too: count only lost connections
+            if (m_mqtt_connected)
+                m_health.mqtt_disconnects++;
+            m_mqtt_connected = false;
             post_log({ "MQTT disconnect" });
             break;
         case MQTT_EVENT_DATA:
@@ -232,7 +244,18 @@ static constexpr const char* DEVICE_JSON_TEMPLATE = R"({
   "cpu0": %s,
   "cpu1": %s,
   "heap": %u,
-  "lblk": %u
+  "lblk": %u,
+  "adc_invalid": %u,
+  "adc_errors": %u,
+  "despikes": %u,
+  "zc_resets": %u,
+  "zc_shifts": %u,
+  "v_bias": %s,
+  "i_bias": %s,
+  "rssi": %s,
+  "wifi_disc": %u,
+  "mqtt_disc": %u,
+  "mqtt_fail": %u
 })";
 
 void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
@@ -250,7 +273,7 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
         return;
     if (uxBits & WIFI_CONNECTED_BIT) {
         char buf[7][64];
-        char json[512];
+        static char json[1024];     // Telemetry task only, kept off its stack
         std::optional<int> ret;
 
         do {
@@ -278,7 +301,18 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
                     format_float(buf[0], sizeof(buf[0]), "%4.1f", msg.device.cpu0),
                     format_float(buf[1], sizeof(buf[1]), "%4.1f", msg.device.cpu1),
                     msg.device.heap,
-                    msg.device.lblk
+                    msg.device.lblk,
+                    static_cast<unsigned>(msg.device.adc_invalid),
+                    static_cast<unsigned>(msg.device.adc_errors),
+                    static_cast<unsigned>(msg.device.despikes),
+                    static_cast<unsigned>(msg.device.zc_resets),
+                    static_cast<unsigned>(msg.device.zc_shifts),
+                    format_float(buf[2], sizeof(buf[2]), "%.1f", msg.device.v_bias),
+                    format_float(buf[3], sizeof(buf[3]), "%.1f", msg.device.i_bias),
+                    format_float(buf[4], sizeof(buf[4]), "%.0f", msg.device.rssi == INT8_MIN ? NAN : msg.device.rssi),
+                    static_cast<unsigned>(msg.device.wifi_disconnects),
+                    static_cast<unsigned>(msg.device.mqtt_disconnects),
+                    static_cast<unsigned>(msg.device.mqtt_failures)
                 );
                 decltype(m_settings.mqtt_topic) topic(m_settings.mqtt_topic);
                 strlcat(topic.data(), DEVICE_TOPIC, sizeof(topic));
@@ -289,6 +323,7 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
 
         if (ret.has_value()) {
             if (ret < 0) {
+                m_health.mqtt_failures++;
                 set_indicator(LED_STATE_MQTT_ERROR);
                 post_log({ "MQTT error" });
             }
@@ -299,6 +334,20 @@ void PowerMeterApp::publish_mqtt_message(const MqttMessage& msg)
     }
     else if (m_netif) {
         post_log({ "Wi-Fi disconn" });
+    }
+}
+
+void PowerMeterApp::publish_mqtt_waveform()
+{
+    constexpr EventBits_t ready_bits = WIFI_CONNECTED_BIT | MQTT_STARTED_BIT;
+    if ((xEventGroupGetBits(m_wifi_event_group) & ready_bits) != ready_bits)
+        return;
+
+    decltype(m_settings.mqtt_topic) topic(m_settings.mqtt_topic);
+    strlcat(topic.data(), WAVEFORM_TOPIC, sizeof(topic));
+    if (esp_mqtt_client_publish(m_mqtt, topic.data(), reinterpret_cast<const char*>(m_capture), MQTT_WAVEFORM_SIZE, 0, 0) < 0) {
+        m_health.mqtt_failures++;
+        ESP_LOGW(TAG, "Waveform publish failed");
     }
 }
 

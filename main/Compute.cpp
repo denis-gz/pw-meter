@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <ctime>
 
 #include "common.h"
 
@@ -16,6 +17,17 @@ constexpr float I_SHIFT_FRAC = V_SHIFT_SAMPLES - LM_SAMPLES_SHIFT;
 
 // Grid frequency = cycles / span of rising zero crossings over this window: error falls as 1/T
 constexpr double FREQ_WINDOW_SAMPLES = CHANNEL_FREQ_HZ * 1.0;
+
+// A crossing off the window's mean period by this much counts as a shift: ~3 mHz over a 1 s window
+constexpr double ZC_SHIFT_SAMPLES = 0.25;
+constexpr int64_t CAPTURE_MIN_INTERVAL_US = 10 * 1000000LL;
+
+struct RawChunk {
+    int16_t v[CHUNK_SIZE];
+    int16_t i[CHUNK_SIZE];
+    double crossings[16];                   // absolute, on the aligned V timeline
+    size_t crossings_count;
+};
 
 // Rising zero crossings on the absolute sample timeline, oldest dropped past the window span
 class CrossingWindow
@@ -76,6 +88,21 @@ void PowerMeterApp::compute_task()
     int64_t zc_last_rising = INT64_MIN / 2;
     CrossingWindow zc_window;
 
+    // Waveform recording buffers: allocated once in PSRAM, kept for the task lifetime
+    RawChunk* raw_curr = psram_new<RawChunk>();
+    RawChunk* raw_prev = psram_new<RawChunk>();
+    m_capture = psram_new<MqttWaveform>();
+    if (!raw_curr || !raw_prev || !m_capture) {
+        ESP_LOGW(TAG, "Waveform recording unavailable: no PSRAM");
+        psram_delete(m_capture), m_capture = nullptr;
+        psram_delete(raw_prev), raw_prev = nullptr;
+        psram_delete(raw_curr), raw_curr = nullptr;
+    }
+    int capture_chunks = 0;
+    int64_t last_capture_us = 0;
+    bool capture_was_active = false;
+    uint32_t last_adc_invalid = 0;
+
     while (!m_stop_tasks) {
         // Check if we have enough samples in BOTH buffers to do a full calculation
         if (m_v_ring_buffer.available() >= CHUNK_SIZE &&
@@ -86,6 +113,19 @@ void PowerMeterApp::compute_task()
             m_i_ring_buffer.pop_burst(i_array, CHUNK_SIZE);
 
             const int64_t now_us = esp_timer_get_time();
+
+            const uint32_t adc_invalid = m_health.adc_invalid;
+            const bool chunk_invalid = adc_invalid != last_adc_invalid;
+            last_adc_invalid = adc_invalid;
+
+            if (raw_curr) {
+                // Samples are whole mV, so int16_t is lossless at half the size of float
+                for (int i = 0; i < CHUNK_SIZE; i++) {
+                    raw_curr->v[i] = v_array[i];
+                    raw_curr->i[i] = i_array[i];
+                }
+                raw_curr->crossings_count = 0;
+            }
 
             // Sacrifice the first chunk to perform initial DC bias learning
             if (std::isnan(m_v_dc_blocker.get_current_dc_bias())) {
@@ -144,6 +184,7 @@ void PowerMeterApp::compute_task()
             const bool is_short_rf_transient = (spike_samples_count > 0 && spike_samples_count <= 5);
             if (is_short_rf_transient) {
                 ESP_LOGW(TAG, "Short RF transient (%d samples) despiked in-place.", spike_samples_count);
+                m_health.despikes++;
             }
 
             for (int i = 0; i < CHUNK_SIZE; i++) {
@@ -187,6 +228,8 @@ void PowerMeterApp::compute_task()
             int first_crossing_sample = -1;
             int last_crossing_sample = -1;
             int chunk_crossings = 0;
+            int chunk_shifts = 0;
+            int chunk_resets = 0;
 
             // A missed or spurious crossing breaks the cycle count: restart the window
             auto register_crossing = [&](double t) {
@@ -195,12 +238,19 @@ void PowerMeterApp::compute_task()
                     bool plausible = period >= MIN_VALID_PERIOD && period <= MAX_VALID_PERIOD;
                     if (plausible && zc_window.size() >= 2) {
                         const double expected = zc_window.mean_period();
-                        plausible = std::abs(period - expected) <= expected * 0.015;
+                        const double deviation = std::abs(period - expected);
+                        plausible = deviation <= expected * 0.015;
+                        if (plausible && deviation > ZC_SHIFT_SAMPLES)
+                            chunk_shifts++;
                     }
-                    if (!plausible)
+                    if (!plausible) {
+                        chunk_resets++;
                         zc_window.clear();
+                    }
                 }
                 zc_window.push(t);
+                if (raw_curr && raw_curr->crossings_count < countof(raw_curr->crossings))
+                    raw_curr->crossings[raw_curr->crossings_count++] = t;
             };
 
             for (int i = 0; i < CHUNK_SIZE; i++) {
@@ -239,8 +289,11 @@ void PowerMeterApp::compute_task()
             }
             chunk_base += CHUNK_SIZE;
 
-            if (chunk_crossings == 0)
+            if (chunk_crossings == 0) {
+                if (zc_window.size() > 0)
+                    chunk_resets++;
                 zc_window.clear();
+            }
 
             m_frequency = (zc_window.size() >= 2)
                 ? static_cast<float>(CHANNEL_FREQ_HZ / zc_window.mean_period())
@@ -277,6 +330,66 @@ void PowerMeterApp::compute_task()
             if (m_i_rms < m_settings.i_noise_floor) {
                 m_i_rms = 0.0f;
             }
+
+            // Health: crossing anomalies count only with mains present, a blackout is not one
+            const bool v_present = m_v_rms > 0.0f;
+            if (v_present) {
+                m_health.zc_shifts += chunk_shifts;
+                m_health.zc_resets += chunk_resets;
+            }
+            m_health.v_bias = m_v_dc_blocker.get_current_dc_bias();
+            m_health.i_bias = m_i_dc_blocker.get_current_dc_bias();
+
+            // --- WAVEFORM RECORDING ---
+            if (m_capture) {
+                const bool capture_active = now_us < m_capture_until_us;
+                if (capture_active != capture_was_active)
+                    ESP_LOGI(TAG, "Waveform recording %s", capture_active ? "started" : "finished");
+                capture_was_active = capture_active;
+
+                uint8_t reasons = 0;
+                if (v_present) {
+                    reasons |= chunk_shifts ? MqttWaveform::Shift : 0;
+                    reasons |= chunk_resets ? MqttWaveform::Reset : 0;
+                    reasons |= is_short_rf_transient ? MqttWaveform::Despike : 0;
+                    reasons |= chunk_invalid ? MqttWaveform::Invalid : 0;
+                }
+
+                auto append_chunk = [&](const RawChunk& chunk) {
+                    auto& c = *m_capture;
+                    memcpy(&c.v[capture_chunks * CHUNK_SIZE], chunk.v, sizeof(chunk.v));
+                    memcpy(&c.i[capture_chunks * CHUNK_SIZE], chunk.i, sizeof(chunk.i));
+                    for (size_t k = 0; k < chunk.crossings_count && c.crossings_count < MqttWaveform::MAX_CROSSINGS; k++)
+                        c.crossings[c.crossings_count++] = chunk.crossings[k] - V_SHIFT_SAMPLES - c.first_sample;
+                    capture_chunks++;
+                };
+
+                if (m_capture_state == CaptureState::Filling) {
+                    append_chunk(*raw_curr);
+                    m_capture_state = CaptureState::Ready;
+                }
+                else if (capture_active && reasons && m_capture_state == CaptureState::Free &&
+                         now_us - last_capture_us >= CAPTURE_MIN_INTERVAL_US) {
+                    last_capture_us = now_us;
+                    auto& c = *m_capture;
+                    c.reasons = reasons;
+                    c.time = std::time(nullptr);
+                    c.first_sample = chunk_base - 2 * CHUNK_SIZE;
+                    c.fs = CHANNEL_FREQ_HZ;
+                    c.v_coef = m_settings.v_coef;
+                    c.i_coef = m_settings.i_coef;
+                    c.v_bias = m_health.v_bias;
+                    c.i_bias = m_health.i_bias;
+                    c.mean_period = (zc_window.size() >= 2) ? zc_window.mean_period() : NAN;
+                    c.crossings_count = 0;
+                    capture_chunks = 0;
+                    append_chunk(*raw_prev);
+                    append_chunk(*raw_curr);
+                    m_capture_state = CaptureState::Filling;
+                }
+                std::swap(raw_curr, raw_prev);
+            }
+            // --------------------------
 
             // Calculate exact wall-clock elapsed time since the previous chunk
             double dt_seconds = static_cast<double>(CHUNK_SIZE) / CHANNEL_FREQ_HZ;
@@ -335,8 +448,12 @@ void PowerMeterApp::compute_task()
     delete[] v_array;
 
     ESP_LOGI(TAG, "compute_task: finished");
-    // Reader notifies this task, so it must be gone before the handle becomes invalid
-    xEventGroupWaitBits(m_task_exit_group, READER_EXIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    // Reader notifies this task, so it must be gone before the handle becomes invalid;
+    // telemetry may still be publishing the capture buffer
+    xEventGroupWaitBits(m_task_exit_group, READER_EXIT_BIT | TELEMETRY_EXIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    psram_delete(m_capture), m_capture = nullptr;
+    psram_delete(raw_prev);
+    psram_delete(raw_curr);
     m_compute_task = nullptr;
     xEventGroupSetBits(m_task_exit_group, COMPUTE_EXIT_BIT);
     vTaskDelete(nullptr);

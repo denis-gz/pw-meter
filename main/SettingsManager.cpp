@@ -19,6 +19,13 @@ static void get_value(nvs_handle_t handle, const char* key, double& value)
         value = std::bit_cast<double>(raw);
 }
 
+static void get_value(nvs_handle_t handle, const char* key, uint8_t& value)
+{
+    uint8_t raw;
+    if (nvs_get_u8(handle, key, &raw) == ESP_OK)
+        value = raw;
+}
+
 void SettingsManager::setup(bool disposing)
 {
     if (disposing) {

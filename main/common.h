@@ -1,8 +1,11 @@
 #pragma once
 
 #include "sdkconfig.h"
+#include <esp_heap_caps.h>
 #include <array>
 #include <cstddef>
+#include <new>
+#include <utility>
 
 #define nameof(x) #x
 
@@ -10,7 +13,7 @@
 
 extern const char* const TAG;
 
-template <typename F, class T, typename R, typename... Args>
+template<typename F, typename T, typename R, typename... Args>
 F member_cast(R (T::*member_ptr)(Args...))
 {
     union {
@@ -22,6 +25,22 @@ F member_cast(R (T::*member_ptr)(Args...))
     };
 
     return cast.f_ptr;
+}
+
+template<typename T, typename... Args>
+T* psram_new(Args&&... args)
+{
+    void* p = heap_caps_malloc(sizeof(T), MALLOC_CAP_SPIRAM);
+    return p ? new (p) T(std::forward<Args>(args)...) : nullptr;
+}
+
+template<typename T>
+void psram_delete(T* p)
+{
+    if (p) {
+        p->~T();
+        heap_caps_free(p);
+    }
 }
 
 template<size_t size>

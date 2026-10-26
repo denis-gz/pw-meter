@@ -8,6 +8,7 @@
 #include <hal/adc_ll.h>
 #include <soc/soc.h>
 #include <cmath>
+#include <cstddef>
 
 #include "common.h"
 #include "RotaryEncoder.h"
@@ -91,12 +92,54 @@ private:
             float  cpu1;
             size_t heap;
             size_t lblk;
+            // Running totals since boot
+            uint32_t adc_invalid;
+            uint32_t adc_errors;
+            uint32_t despikes;
+            uint32_t zc_resets;
+            uint32_t zc_shifts;
+            uint32_t wifi_disconnects;
+            uint32_t mqtt_disconnects;
+            uint32_t mqtt_failures;
+            // Current values
+            float  v_bias;              // raw mV
+            float  i_bias;
+            int8_t rssi;                // dBm, INT8_MIN when not connected
         };
 
         time_t        time;
         PowerMetrics  power;
         DeviceMetrics device;
     };
+
+    // Raw V/I around a grid frequency anomaly: previous, trigger and next chunks.
+    // Published as-is (little-endian), so the layout is the wire format
+    struct MqttWaveform {
+        enum Reason : uint8_t { Shift = 1, Reset = 2, Despike = 4, Invalid = 8 };
+        static constexpr int CHUNKS = 3;
+        static constexpr int SAMPLES = CHUNK_SIZE * CHUNKS;
+        static constexpr int MAX_CROSSINGS = 48;
+
+        char magic[4] { 'P', 'W', 'W', 'F' };
+        uint8_t version = 1;
+        uint8_t reasons;
+        uint16_t samples = SAMPLES;         // per channel
+        int64_t time;                       // unix seconds
+        int64_t first_sample;               // absolute raw index of v[0]
+        double fs;                          // per channel
+        float v_coef;
+        float i_coef;
+        float v_bias;                       // raw mV
+        float i_bias;
+        double mean_period;                 // samples, NaN without a window
+        uint16_t crossings_count;
+        uint16_t reserved = 0;
+        float crossings[MAX_CROSSINGS];     // detected rising crossings, samples relative to v[0]
+        int16_t v[SAMPLES];                 // raw mV, before DC blocking and despiking
+        int16_t i[SAMPLES];
+    };
+    static_assert(offsetof(MqttWaveform, crossings) == 60 && offsetof(MqttWaveform, v) == 252);
+    static constexpr size_t MQTT_WAVEFORM_SIZE = offsetof(MqttWaveform, i) + sizeof(MqttWaveform::i);
 
     enum class EncoderInputAction {
         Next,
@@ -172,6 +215,7 @@ private:
     void on_mqtt_event(esp_event_base_t event_base, int32_t event_id, void* event_data);
     void on_wifi_event(esp_event_base_t event_base, int32_t event_id, void* event_data);
     void publish_mqtt_message(const MqttMessage& msg);
+    void publish_mqtt_waveform();
 
     void process_result(const ResultMessage& result);
     void process_encoder_input(const EncoderInputMessage& encoder);
@@ -232,10 +276,37 @@ private:
     float m_frequency = 0;
     //float m_vi_sample_shift = 0;
 
+    // Health counters, written by the tasks that observe the events
+    struct HealthCounters {
+        std::atomic<uint32_t> adc_invalid;
+        std::atomic<uint32_t> adc_errors;
+        std::atomic<uint32_t> despikes;
+        std::atomic<uint32_t> zc_resets;
+        std::atomic<uint32_t> zc_shifts;
+        std::atomic<uint32_t> wifi_disconnects;
+        std::atomic<uint32_t> mqtt_disconnects;
+        std::atomic<uint32_t> mqtt_failures;
+        std::atomic<float> v_bias;
+        std::atomic<float> i_bias;
+    };
+    HealthCounters m_health {};
+    bool m_mqtt_connected = false;      // MQTT event handler only
+
+    // Waveform recording, active until the esp_timer deadline; buffers are allocated once by compute_task
+    enum class CaptureState : uint8_t { Free, Filling, Ready };
+    std::atomic<int64_t> m_capture_until_us {};
+    std::atomic<CaptureState> m_capture_state { CaptureState::Free };
+    MqttWaveform* m_capture = nullptr;
+
     // ***** DEBUG *****
     //volatile uint32_t m_error_count = 0;
     //volatile uint32_t m_phase_shift = 0;
     // *****
+
+    // Console prompt state shared with the interface task: keystrokes count as interaction,
+    // and the idle timeout cancels a pending prompt
+    std::atomic<TickType_t> m_console_activity_tick {};
+    std::atomic_bool m_console_cancel {};
 
     std::atomic<double> m_acc_energy {};
     std::atomic_bool m_acc_energy_saved {};

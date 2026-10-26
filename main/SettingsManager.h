@@ -34,7 +34,13 @@ struct DeviceSettings
     static constexpr const float MIN_FREQ_HZ = 15.0f;           // 15 Hz
     static constexpr const float MAX_FREQ_HZ = 65.0f;           // 65 Hz
     static constexpr const float V_ACC_ENERGY_SAVE = 100.0f;    // 100 V
-    static constexpr const float MQTT_PERIOD = 1.0f;            // 1 sec
+    static constexpr const uint8_t MQTT_PERIOD = 1;             // 1 sec
+    static constexpr const uint8_t MIN_MQTT_PERIOD = 1;         // 1 sec
+    static constexpr const uint8_t MAX_MQTT_PERIOD = 255;       // 255 sec
+    static constexpr const uint16_t WAVE_RECORD_TIME = 180;     // 3 h, in minutes
+    static constexpr const uint16_t WAVE_RECORD_STEP = 15;      // 15 min
+    static constexpr const uint16_t MIN_WAVE_RECORD_TIME = 15;  // 15 min
+    static constexpr const uint16_t MAX_WAVE_RECORD_TIME = 1440;// 24 h
 
     char_array_t<MAX_SSID_LEN_Z>  wifi_ssid {};
     char_array_t<MAX_PASS_LEN_Z>  wifi_pass {};
@@ -42,7 +48,7 @@ struct DeviceSettings
     char_array_t<MAX_CREDS_LEN_Z> mqtt_creds {};                // Use ':' char as a separator, like "user:pass"
     char_array_t<MAX_TOPIC_LEN_Z> mqtt_topic {};
 
-    float mqtt_period = MQTT_PERIOD;
+    uint8_t mqtt_period = MQTT_PERIOD;
     float i_noise_floor = I_NOISE_FLOOR;
     float v_noise_floor = V_NOISE_FLOOR;
     float i_coef = I_COEF;
