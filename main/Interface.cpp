@@ -306,7 +306,8 @@ void PowerMeterApp::process_result(const ResultMessage& result)
     m.power.f_w = (result.real_power == 0.0f)
         ? (ds.filter_w.reset(), ds.inverse[2] = false, 0.0f)
         : ds.filter_w.process(result.real_power, &ds.inverse[2]);
-    m.power.f_hz = std::isnan(result.frequency)
+    // A window restart holds the last frequency, only a blackout clears it
+    m.power.f_hz = (result.v_rms == 0.0f)
         ? (ds.filter_hz.reset(), ds.quant_hz.reset(), ds.inverse[6] = false, NAN)
         : ds.quant_hz.process(ds.filter_hz.process(result.frequency, &ds.inverse[6]));
     //float f_cos = filter_pf.process(result.cos_phi);

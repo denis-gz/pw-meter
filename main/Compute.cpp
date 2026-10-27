@@ -25,8 +25,8 @@ constexpr size_t ZC_WINDOW_CAPACITY =
 constexpr double ZC_SHIFT_SAMPLES = 0.25;
 // A crossing off the predicted time by more than this fraction of a period is dropped
 constexpr double ZC_REJECT_FRACTION = 0.015;
-// This many dropped crossings in a row mean a real change: the window restarts
-constexpr int ZC_MAX_REJECTS_IN_ROW = 3;
+// This many dropped crossings in a row (0.2 s) mean a real phase jump, not arcing: the window restarts
+constexpr int ZC_MAX_REJECTS_IN_ROW = 10;
 // Frequency is reported once the window holds this many crossings (0.2 s at 50 Hz)
 constexpr size_t ZC_MIN_CROSSINGS = 10;
 
@@ -66,8 +66,17 @@ public:
     size_t size() const { return count; }
     const Crossing& newest() const { return at(count - 1); }
 
+    // Least-squares line through the crossings: time = origin + period * (cycle - cycle0)
+    struct Line {
+        double period;                      // samples per grid period
+        double origin;                      // samples, fitted time of cycle0
+        int64_t cycle0;
+
+        double time_of(int64_t cycle) const { return origin + period * (cycle - cycle0); }
+    };
+
     // Sums relative to the oldest crossing keep them small for double precision
-    double period() const {
+    Line fit() const {
         const Crossing& o = at(0);
         double sx = 0, sy = 0, sxx = 0, sxy = 0;
         for (size_t k = 0; k < count; k++) {
@@ -78,7 +87,8 @@ public:
             sxx += x * x;
             sxy += x * y;
         }
-        return (count * sxy - sx * sy) / (count * sxx - sx * sx);
+        const double period = (count * sxy - sx * sy) / (count * sxx - sx * sx);
+        return { period, o.time + (sy - period * sx) / count, o.cycle };
     }
 
     void clear() {
@@ -281,10 +291,12 @@ void PowerMeterApp::compute_task()
                 int64_t cycles = 1;
                 bool plausible = elapsed >= MIN_VALID_PERIOD && elapsed <= MAX_VALID_PERIOD;
                 if (zc_window.size() >= 2) {
-                    const double period = zc_window.period();
-                    cycles = std::max<int64_t>(1, std::llround(elapsed / period));
-                    const double deviation = std::abs(elapsed - cycles * period);
-                    plausible = deviation <= period * ZC_REJECT_FRACTION;
+                    // Predicted from the fitted line: a displaced newest crossing must not shift the next ones
+                    const auto line = zc_window.fit();
+                    const double from_line = t - line.time_of(last.cycle);
+                    cycles = std::max<int64_t>(1, std::llround(from_line / line.period));
+                    const double deviation = std::abs(from_line - cycles * line.period);
+                    plausible = deviation <= line.period * ZC_REJECT_FRACTION;
                     if (plausible && deviation > ZC_SHIFT_SAMPLES)
                         chunk_shifts++;
                 }
@@ -345,7 +357,7 @@ void PowerMeterApp::compute_task()
                 zc_window.clear();
             }
 
-            const double zc_period = (zc_window.size() >= ZC_MIN_CROSSINGS) ? zc_window.period() : NAN;
+            const double zc_period = (zc_window.size() >= ZC_MIN_CROSSINGS) ? zc_window.fit().period : NAN;
             m_frequency = CHANNEL_FREQ_HZ / zc_period;
             // -----------------------------------------------------
 
