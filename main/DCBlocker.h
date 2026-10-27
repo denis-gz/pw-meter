@@ -9,7 +9,7 @@ private:
     float alpha;
 
 public:
-    DCBlocker(float alpha_val = 0.001f) {
+    DCBlocker(float alpha_val = 0.00025f) {  // τ ≈ 1 s at 4 kHz
         alpha = alpha_val;
     }
 

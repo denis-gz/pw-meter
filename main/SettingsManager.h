@@ -30,10 +30,14 @@ struct DeviceSettings
     static constexpr const float V_NOISE_FLOOR = 5.0f;          // 5 V
     static constexpr const float I_COEF = 0.02699f;
     static constexpr const float V_COEF = 0.48565f;
+    static constexpr const float LM_SAMPLES_SHIFT = 4.60f;      // V/I delay of the LM358 stage, measured in samples
     static constexpr const float V_HYSTERESIS = 15.0f;          // 15 V
+    static constexpr const float MAX_EXPECTED_V_RMS = 270.0f;   // 270 V, short peaks above it are despiked
     static constexpr const float MIN_FREQ_HZ = 15.0f;           // 15 Hz
     static constexpr const float MAX_FREQ_HZ = 65.0f;           // 65 Hz
     static constexpr const float V_ACC_ENERGY_SAVE = 100.0f;    // 100 V
+    static constexpr const double ENERGY_SAVE_STEP_WH = 100.0;  // 100 Wh
+    static constexpr const uint32_t ENERGY_SAVE_MIN_PERIOD_MS = 60000; // 1 min
     static constexpr const uint8_t MQTT_PERIOD = 1;             // 1 sec
     static constexpr const uint8_t MIN_MQTT_PERIOD = 1;         // 1 sec
     static constexpr const uint8_t MAX_MQTT_PERIOD = 255;       // 255 sec

@@ -27,10 +27,6 @@ static std::array<uint8_t, PIN_LENGTH> get_settings_pin()
     return pin;
 }
 
-#define READINGS_PER_SECOND 5
-#define ENERGY_SAVE_STEP_WH 100.0
-#define ENERGY_SAVE_MIN_PERIOD_MS 60000
-
 enum ScreenPage: uint8_t {
     SplashScreen,
     MainsPage,
@@ -124,7 +120,7 @@ struct DisplayContext
     uint16_t wave_record_min = DeviceSettings::WAVE_RECORD_TIME;
     uint8_t mqtt_period_edit = DeviceSettings::MQTT_PERIOD;
 
-    std::optional<int64_t> saved_energy_step;   // Energy counter in ENERGY_SAVE_STEP_WH units at the last periodic save
+    std::optional<int64_t> saved_energy_step;   // Energy counter in DeviceSettings::ENERGY_SAVE_STEP_WH units at the last periodic save
     TickType_t last_energy_save_tick = 0;
 
     void clear_screen(bool clear_inverse = true) {
@@ -325,14 +321,14 @@ void PowerMeterApp::process_result(const ResultMessage& result)
         m_acc_energy_saved = false;
     }
     // Periodic save to limit the loss on an unexpected power-off
-    const int64_t energy_step = std::floor(result.energy / ENERGY_SAVE_STEP_WH);
+    const int64_t energy_step = std::floor(result.energy / DeviceSettings::ENERGY_SAVE_STEP_WH);
     const TickType_t now = xTaskGetTickCount();
     if (!ds.saved_energy_step) {
         ds.saved_energy_step = energy_step;
         ds.last_energy_save_tick = now;
     }
     else if (energy_step != *ds.saved_energy_step &&
-             now - ds.last_energy_save_tick >= pdMS_TO_TICKS(ENERGY_SAVE_MIN_PERIOD_MS)) {
+             now - ds.last_energy_save_tick >= pdMS_TO_TICKS(DeviceSettings::ENERGY_SAVE_MIN_PERIOD_MS)) {
         SettingsManager::save(KEY_ACC_ENERGY, m_acc_energy);
         ds.saved_energy_step = energy_step;
         ds.last_energy_save_tick = now;
@@ -1022,6 +1018,7 @@ void PowerMeterApp::get_device_metrics(MqttMessage& m)
     m.device.adc_invalid = m_health.adc_invalid;
     m.device.adc_errors = m_health.adc_errors;
     m.device.despikes = m_health.despikes;
+    m.device.zc_rejects = m_health.zc_rejects;
     m.device.zc_resets = m_health.zc_resets;
     m.device.zc_shifts = m_health.zc_shifts;
     m.device.wifi_disconnects = m_health.wifi_disconnects;

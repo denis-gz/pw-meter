@@ -77,7 +77,7 @@ void PowerMeterApp::start_tasks()
     xTaskCreatePinnedToCore(
         member_cast<TaskFunction_t>(&PowerMeterApp::compute_task),
         "compute_task",         // A descriptive name for debugging
-        4096,                   // Stack size
+        5120,                   // Stack size
         this,                   // Parameter passed to the task (pointer to object)
         15,                     // Task priority (0 is lowest, configMAX_PRIORITIES-1 is highest)
         &m_compute_task,        // Task handle for notifications

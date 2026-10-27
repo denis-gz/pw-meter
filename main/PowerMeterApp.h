@@ -35,16 +35,14 @@ constexpr double CHANNEL_FREQ_HZ = double(APB_CLK_FREQ) / ADC_CLKM_DIV / (2 * AD
 // We want to process exactly 10 AC cycles (at 50Hz and 4000 sampling rate)
 const int CHUNK_SIZE = 800;     // 4000 / 50 * 10
 
+// Chunks per second at the nominal rate (actual 5.008)
+constexpr int READINGS_PER_SECOND = SAMPLE_FREQ_HZ / 2 / CHUNK_SIZE;
+static_assert(SAMPLE_FREQ_HZ / 2 % CHUNK_SIZE == 0);
+
 // Number of bytes the DMA will push to our task at once.
 // 6400 bytes = 1600 samples (800 voltage + 800 current) per frame (4 bytes)
 const size_t SAMPLES_TO_READ = CHUNK_SIZE * 2;
 const size_t FRAME_BUF_SIZE = SAMPLES_TO_READ * SOC_ADC_DIGI_DATA_BYTES_PER_CONV;
-
-// Sampling shift between V and I channels introduced by the LM358 op-amp (measured samples)
-#define LM_SAMPLES_SHIFT (4.60f)
-
-// Define the absolute maximum real-world voltage before considering it a glitch
-const float MAX_EXPECTED_V_RMS = 270.0f;
 
 constexpr bool kDisposing = true;
 
@@ -96,6 +94,7 @@ private:
             uint32_t adc_invalid;
             uint32_t adc_errors;
             uint32_t despikes;
+            uint32_t zc_rejects;
             uint32_t zc_resets;
             uint32_t zc_shifts;
             uint32_t wifi_disconnects;
@@ -115,28 +114,34 @@ private:
     // Raw V/I around a grid frequency anomaly: previous, trigger and next chunks.
     // Published as-is (little-endian), so the layout is the wire format
     struct MqttWaveform {
-        enum Reason : uint8_t { Shift = 1, Reset = 2, Despike = 4, Invalid = 8 };
-        static constexpr int CHUNKS = 3;
-        static constexpr int SAMPLES = CHUNK_SIZE * CHUNKS;
+        enum Reason: uint8_t {
+            Shift = 1,      // crossing off the predicted time by > ZC_SHIFT_SAMPLES, still plausible
+            Reset = 2,      // ZC_MAX_REJECTS_IN_ROW rejects or a chunk without crossings: window cleared
+            Despike = 4,    // 1..5 samples beyond the overvoltage threshold, replaced in-place
+            Invalid = 8,    // ADC returned invalid samples in the trigger chunk
+            Reject = 16     // crossing off the predicted time by > ZC_REJECT_FRACTION of a period, dropped
+        };
+        static constexpr int N_CHUNKS = 3;
+        static constexpr int N_SAMPLES = CHUNK_SIZE * N_CHUNKS;
         static constexpr int MAX_CROSSINGS = 48;
 
         char magic[4] { 'P', 'W', 'W', 'F' };
         uint8_t version = 1;
         uint8_t reasons;
-        uint16_t samples = SAMPLES;         // per channel
+        uint16_t n_samples = N_SAMPLES;     // per channel
         int64_t time;                       // unix seconds
-        int64_t first_sample;               // absolute raw index of v[0]
-        double fs;                          // per channel
+        int64_t start_index;                // absolute raw index of v[0]
+        double fs;                          // per-channel rate, Hz (actual ADC rate, not the nominal 4000)
         float v_coef;
         float i_coef;
         float v_bias;                       // raw mV
         float i_bias;
-        double mean_period;                 // samples, NaN without a window
+        double mean_period;                 // samples, NaN until ZC_MIN_CROSSINGS
         uint16_t crossings_count;
         uint16_t reserved = 0;
         float crossings[MAX_CROSSINGS];     // detected rising crossings, samples relative to v[0]
-        int16_t v[SAMPLES];                 // raw mV, before DC blocking and despiking
-        int16_t i[SAMPLES];
+        int16_t v[N_SAMPLES];               // raw mV, before DC blocking and despiking
+        int16_t i[N_SAMPLES];
     };
     static_assert(offsetof(MqttWaveform, crossings) == 60 && offsetof(MqttWaveform, v) == 252);
     static constexpr size_t MQTT_WAVEFORM_SIZE = offsetof(MqttWaveform, i) + sizeof(MqttWaveform::i);
@@ -281,6 +286,7 @@ private:
         std::atomic<uint32_t> adc_invalid;
         std::atomic<uint32_t> adc_errors;
         std::atomic<uint32_t> despikes;
+        std::atomic<uint32_t> zc_rejects;
         std::atomic<uint32_t> zc_resets;
         std::atomic<uint32_t> zc_shifts;
         std::atomic<uint32_t> wifi_disconnects;
@@ -293,7 +299,11 @@ private:
     bool m_mqtt_connected = false;      // MQTT event handler only
 
     // Waveform recording, active until the esp_timer deadline; buffers are allocated once by compute_task
-    enum class CaptureState : uint8_t { Free, Filling, Ready };
+    enum class CaptureState: uint8_t {
+        Free,       // m_capture unused, compute_task may start a capture
+        Filling,    // compute_task appends the chunk after the trigger
+        Ready       // complete, telemetry_task publishes it and sets Free
+    };
     std::atomic<int64_t> m_capture_until_us {};
     std::atomic<CaptureState> m_capture_state { CaptureState::Free };
     MqttWaveform* m_capture = nullptr;

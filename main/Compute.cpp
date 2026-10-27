@@ -12,14 +12,24 @@
 
 // V/I alignment: V is delayed by whole samples only (values stay intact),
 // the remaining fraction is applied to I using linear interpolation
-constexpr int V_SHIFT_SAMPLES = static_cast<int>(LM_SAMPLES_SHIFT) + 1;
-constexpr float I_SHIFT_FRAC = V_SHIFT_SAMPLES - LM_SAMPLES_SHIFT;
+constexpr int V_SHIFT_SAMPLES = static_cast<int>(DeviceSettings::LM_SAMPLES_SHIFT) + 1;
+constexpr float I_SHIFT_FRAC = V_SHIFT_SAMPLES - DeviceSettings::LM_SAMPLES_SHIFT;
 
 // Grid frequency = cycles / span of rising zero crossings over this window: error falls as 1/T
 constexpr double FREQ_WINDOW_SAMPLES = CHANNEL_FREQ_HZ * 1.0;
+// Crossings in a full window at the highest valid frequency, +2 for the edges
+constexpr size_t ZC_WINDOW_CAPACITY =
+    static_cast<size_t>(FREQ_WINDOW_SAMPLES * DeviceSettings::MAX_FREQ_HZ / CHANNEL_FREQ_HZ) + 2;
 
-// A crossing off the window's mean period by this much counts as a shift: ~3 mHz over a 1 s window
+// A crossing off the predicted time by this much counts as a shift: ~3 mHz over a 1 s window
 constexpr double ZC_SHIFT_SAMPLES = 0.25;
+// A crossing off the predicted time by more than this fraction of a period is dropped
+constexpr double ZC_REJECT_FRACTION = 0.015;
+// This many dropped crossings in a row mean a real change: the window restarts
+constexpr int ZC_MAX_REJECTS_IN_ROW = 3;
+// Frequency is reported once the window holds this many crossings (0.2 s at 50 Hz)
+constexpr size_t ZC_MIN_CROSSINGS = 10;
+
 constexpr int64_t CAPTURE_MIN_INTERVAL_US = 10 * 1000000LL;
 
 struct RawChunk {
@@ -29,35 +39,58 @@ struct RawChunk {
     size_t crossings_count;
 };
 
-// Rising zero crossings on the absolute sample timeline, oldest dropped past the window span
+// Rising zero crossings with their cycle numbers, oldest dropped past the window span.
+// Period is the least-squares slope of time over cycle: a dropped crossing leaves
+// a gap in the numbering, a displaced one barely moves the fit
 class CrossingWindow
 {
+public:
+    struct Crossing {
+        int64_t cycle;                      // grid periods, counted from the window start
+        double time;                        // samples, fractional absolute index on the aligned V timeline
+    };
+
 private:
-    std::array<double, 128> times {};
+    std::array<Crossing, ZC_WINDOW_CAPACITY> items {};
     size_t head = 0;
     size_t count = 0;
 
+    const Crossing& at(size_t k) const { return items[(head + k) % items.size()]; }
+
     void drop_oldest() {
-        head = (head + 1) % times.size();
+        head = (head + 1) % items.size();
         count--;
     }
 
 public:
     size_t size() const { return count; }
-    double oldest() const { return times[head]; }
-    double newest() const { return times[(head + count - 1) % times.size()]; }
-    double mean_period() const { return (newest() - oldest()) / (count - 1); }
+    const Crossing& newest() const { return at(count - 1); }
+
+    // Sums relative to the oldest crossing keep them small for double precision
+    double period() const {
+        const Crossing& o = at(0);
+        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (size_t k = 0; k < count; k++) {
+            const double x = at(k).cycle - o.cycle;
+            const double y = at(k).time - o.time;
+            sx += x;
+            sy += y;
+            sxx += x * x;
+            sxy += x * y;
+        }
+        return (count * sxy - sx * sy) / (count * sxx - sx * sx);
+    }
 
     void clear() {
         count = 0;
     }
 
-    void push(double t) {
-        if (count == times.size())
+    void push(int64_t cycle, double time) {
+        if (count == items.size())
             drop_oldest();
-        times[(head + count) % times.size()] = t;
+        items[(head + count) % items.size()] = { cycle, time };
         count++;
-        while (count > 2 && t - oldest() > FREQ_WINDOW_SAMPLES)
+        while (count > 2 && time - at(0).time > FREQ_WINDOW_SAMPLES)
             drop_oldest();
     }
 };
@@ -87,6 +120,7 @@ void PowerMeterApp::compute_task()
     double zc_candidate = NAN;
     int64_t zc_last_rising = INT64_MIN / 2;
     CrossingWindow zc_window;
+    int zc_rejects_in_row = 0;
 
     // Waveform recording buffers: allocated once in PSRAM, kept for the task lifetime
     RawChunk* raw_curr = psram_new<RawChunk>();
@@ -171,7 +205,7 @@ void PowerMeterApp::compute_task()
             // - 1..5 samples (< 1.25 ms): It is a fast RF/switching needle -> despike in-place without corrupting DCBlocker.
             // - > 5 samples: It is a genuine high-voltage AC sine wave (e.g. 280V-400V neutral fault) -> process normally!
 
-            const float SPIKE_THRESHOLD_ADC = (MAX_EXPECTED_V_RMS * M_SQRT2) / m_settings.v_coef;
+            const float SPIKE_THRESHOLD_ADC = (DeviceSettings::MAX_EXPECTED_V_RMS * M_SQRT2) / m_settings.v_coef;
             const float current_v_bias = m_v_dc_blocker.get_current_dc_bias();
 
             int spike_samples_count = 0;
@@ -229,28 +263,44 @@ void PowerMeterApp::compute_task()
             int last_crossing_sample = -1;
             int chunk_crossings = 0;
             int chunk_shifts = 0;
+            int chunk_rejects = 0;
             int chunk_resets = 0;
 
-            // A missed or spurious crossing breaks the cycle count: restart the window
+            // A notch or burst near zero moves a crossing, the grid can't: drop the outlier, keep the window
             auto register_crossing = [&](double t) {
-                if (zc_window.size() > 0) {
-                    const double period = t - zc_window.newest();
-                    bool plausible = period >= MIN_VALID_PERIOD && period <= MAX_VALID_PERIOD;
-                    if (plausible && zc_window.size() >= 2) {
-                        const double expected = zc_window.mean_period();
-                        const double deviation = std::abs(period - expected);
-                        plausible = deviation <= expected * 0.015;
-                        if (plausible && deviation > ZC_SHIFT_SAMPLES)
-                            chunk_shifts++;
-                    }
-                    if (!plausible) {
-                        chunk_resets++;
-                        zc_window.clear();
-                    }
-                }
-                zc_window.push(t);
                 if (raw_curr && raw_curr->crossings_count < countof(raw_curr->crossings))
                     raw_curr->crossings[raw_curr->crossings_count++] = t;
+
+                if (zc_window.size() == 0) {
+                    zc_rejects_in_row = 0;
+                    zc_window.push(0, t);
+                    return;
+                }
+                const auto last = zc_window.newest();
+                const double elapsed = t - last.time;
+                int64_t cycles = 1;
+                bool plausible = elapsed >= MIN_VALID_PERIOD && elapsed <= MAX_VALID_PERIOD;
+                if (zc_window.size() >= 2) {
+                    const double period = zc_window.period();
+                    cycles = std::max<int64_t>(1, std::llround(elapsed / period));
+                    const double deviation = std::abs(elapsed - cycles * period);
+                    plausible = deviation <= period * ZC_REJECT_FRACTION;
+                    if (plausible && deviation > ZC_SHIFT_SAMPLES)
+                        chunk_shifts++;
+                }
+                if (plausible) {
+                    zc_rejects_in_row = 0;
+                    zc_window.push(last.cycle + cycles, t);
+                }
+                else {
+                    chunk_rejects++;
+                    if (++zc_rejects_in_row >= ZC_MAX_REJECTS_IN_ROW) {
+                        chunk_resets++;
+                        zc_window.clear();
+                        zc_window.push(0, t);
+                        zc_rejects_in_row = 0;
+                    }
+                }
             };
 
             for (int i = 0; i < CHUNK_SIZE; i++) {
@@ -295,9 +345,8 @@ void PowerMeterApp::compute_task()
                 zc_window.clear();
             }
 
-            m_frequency = (zc_window.size() >= 2)
-                ? static_cast<float>(CHANNEL_FREQ_HZ / zc_window.mean_period())
-                : NAN;
+            const double zc_period = (zc_window.size() >= ZC_MIN_CROSSINGS) ? zc_window.period() : NAN;
+            m_frequency = CHANNEL_FREQ_HZ / zc_period;
             // -----------------------------------------------------
 
             // --- DATA IS NOW READY FOR ESP-DSP ---
@@ -335,6 +384,7 @@ void PowerMeterApp::compute_task()
             const bool v_present = m_v_rms > 0.0f;
             if (v_present) {
                 m_health.zc_shifts += chunk_shifts;
+                m_health.zc_rejects += chunk_rejects;
                 m_health.zc_resets += chunk_resets;
             }
             m_health.v_bias = m_v_dc_blocker.get_current_dc_bias();
@@ -353,6 +403,7 @@ void PowerMeterApp::compute_task()
                     reasons |= chunk_resets ? MqttWaveform::Reset : 0;
                     reasons |= is_short_rf_transient ? MqttWaveform::Despike : 0;
                     reasons |= chunk_invalid ? MqttWaveform::Invalid : 0;
+                    reasons |= chunk_rejects ? MqttWaveform::Reject : 0;
                 }
 
                 auto append_chunk = [&](const RawChunk& chunk) {
@@ -360,32 +411,40 @@ void PowerMeterApp::compute_task()
                     memcpy(&c.v[capture_chunks * CHUNK_SIZE], chunk.v, sizeof(chunk.v));
                     memcpy(&c.i[capture_chunks * CHUNK_SIZE], chunk.i, sizeof(chunk.i));
                     for (size_t k = 0; k < chunk.crossings_count && c.crossings_count < MqttWaveform::MAX_CROSSINGS; k++)
-                        c.crossings[c.crossings_count++] = chunk.crossings[k] - V_SHIFT_SAMPLES - c.first_sample;
+                        c.crossings[c.crossings_count++] = chunk.crossings[k] - V_SHIFT_SAMPLES - c.start_index;
                     capture_chunks++;
                 };
 
-                if (m_capture_state == CaptureState::Filling) {
-                    append_chunk(*raw_curr);
-                    m_capture_state = CaptureState::Ready;
-                }
-                else if (capture_active && reasons && m_capture_state == CaptureState::Free &&
-                         now_us - last_capture_us >= CAPTURE_MIN_INTERVAL_US) {
-                    last_capture_us = now_us;
-                    auto& c = *m_capture;
-                    c.reasons = reasons;
-                    c.time = std::time(nullptr);
-                    c.first_sample = chunk_base - 2 * CHUNK_SIZE;
-                    c.fs = CHANNEL_FREQ_HZ;
-                    c.v_coef = m_settings.v_coef;
-                    c.i_coef = m_settings.i_coef;
-                    c.v_bias = m_health.v_bias;
-                    c.i_bias = m_health.i_bias;
-                    c.mean_period = (zc_window.size() >= 2) ? zc_window.mean_period() : NAN;
-                    c.crossings_count = 0;
-                    capture_chunks = 0;
-                    append_chunk(*raw_prev);
-                    append_chunk(*raw_curr);
-                    m_capture_state = CaptureState::Filling;
+                switch (m_capture_state) {
+                    case CaptureState::Free: {
+                        if (capture_active && reasons && now_us - last_capture_us >= CAPTURE_MIN_INTERVAL_US) {
+                            last_capture_us = now_us;
+                            auto& c = *m_capture;
+                            c.reasons = reasons;
+                            c.time = std::time(nullptr);
+                            c.start_index = chunk_base - 2 * CHUNK_SIZE;
+                            c.fs = CHANNEL_FREQ_HZ;
+                            c.v_coef = m_settings.v_coef;
+                            c.i_coef = m_settings.i_coef;
+                            c.v_bias = m_health.v_bias;
+                            c.i_bias = m_health.i_bias;
+                            c.mean_period = zc_period;
+                            c.crossings_count = 0;
+                            capture_chunks = 0;
+                            append_chunk(*raw_prev);
+                            append_chunk(*raw_curr);
+                            m_capture_state = CaptureState::Filling;
+                        }
+                        break;
+                    }
+                    case CaptureState::Filling: {
+                        append_chunk(*raw_curr);
+                        m_capture_state = CaptureState::Ready;
+                        break;
+                    }
+                    case CaptureState::Ready:
+                        // Owned by the telemetry task until published
+                        break;
                 }
                 std::swap(raw_curr, raw_prev);
             }
