@@ -288,13 +288,15 @@ void PowerMeterApp::compute_task()
                 }
                 const auto last = zc_window.newest();
                 const double elapsed = t - last.time;
+                // Until the window is filled, a missed or spurious crossing would lock the fit on a wrong period
+                const bool seeding = zc_window.size() < ZC_MIN_CROSSINGS;
                 int64_t cycles = 1;
                 bool plausible = elapsed >= MIN_VALID_PERIOD && elapsed <= MAX_VALID_PERIOD;
                 if (zc_window.size() >= 2) {
                     // Predicted from the fitted line: a displaced newest crossing must not shift the next ones
                     const auto line = zc_window.fit();
                     const double from_line = t - line.time_of(last.cycle);
-                    cycles = std::max<int64_t>(1, std::llround(from_line / line.period));
+                    cycles = seeding ? 1 : std::max<int64_t>(1, std::llround(from_line / line.period));
                     const double deviation = std::abs(from_line - cycles * line.period);
                     plausible = deviation <= line.period * ZC_REJECT_FRACTION;
                     if (plausible && deviation > ZC_SHIFT_SAMPLES)
@@ -306,7 +308,7 @@ void PowerMeterApp::compute_task()
                 }
                 else {
                     chunk_rejects++;
-                    if (++zc_rejects_in_row >= ZC_MAX_REJECTS_IN_ROW) {
+                    if (++zc_rejects_in_row >= ZC_MAX_REJECTS_IN_ROW || seeding) {
                         chunk_resets++;
                         zc_window.clear();
                         zc_window.push(0, t);

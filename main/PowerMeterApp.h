@@ -116,7 +116,7 @@ private:
     struct MqttWaveform {
         enum Reason: uint8_t {
             Shift = 1,      // crossing off the predicted time by > ZC_SHIFT_SAMPLES, still plausible
-            Reset = 2,      // ZC_MAX_REJECTS_IN_ROW rejects or a chunk without crossings: window cleared
+            Reset = 2,      // ZC_MAX_REJECTS_IN_ROW rejects, any reject while seeding or a chunk without crossings: window cleared
             Despike = 4,    // 1..5 samples beyond the overvoltage threshold, replaced in-place
             Invalid = 8,    // ADC returned invalid samples in the trigger chunk
             Reject = 16     // crossing off the predicted time by > ZC_REJECT_FRACTION of a period, dropped
